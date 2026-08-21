@@ -1,0 +1,7 @@
+node_modules
+dist
+.DS_Store
+moj-kompic.db
+moj-kompic.db-shm
+moj-kompic.db-wal
+.env

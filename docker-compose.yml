@@ -1,0 +1,28 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: kompic
+      POSTGRES_USER: kompic
+      POSTGRES_PASSWORD: change-me
+    volumes:
+      - kompic_db_data:/var/lib/postgresql/data
+    ports:
+      # Izložen radi jednokratne migracije sa SQLite (npm run migrate:postgres) s Maca.
+      # Nakon migracije slobodno makni ovaj blok i pokreni `docker compose up -d` ponovno.
+      - "5432:5432"
+
+  app:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      - db
+    environment:
+      DATABASE_URL: postgres://kompic:change-me@db:5432/kompic
+      PORT: 3001
+    ports:
+      - "3001:3001"
+
+volumes:
+  kompic_db_data:
