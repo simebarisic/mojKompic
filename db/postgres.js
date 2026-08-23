@@ -41,6 +41,18 @@ export async function init() {
       label TEXT,
       amount DOUBLE PRECISION
     );
+    CREATE TABLE IF NOT EXISTS consumption_assets (
+      id TEXT PRIMARY KEY,
+      label TEXT NOT NULL,
+      type TEXT NOT NULL,
+      purchase_value DOUBLE PRECISION NOT NULL,
+      purchase_date TEXT NOT NULL,
+      depreciation_rate DOUBLE PRECISION NOT NULL,
+      value_override DOUBLE PRECISION,
+      override_date TEXT,
+      notes TEXT,
+      sort_order INTEGER NOT NULL
+    );
   `);
 }
 
@@ -51,6 +63,12 @@ export async function getState() {
   const { rows: valueRows } = await p.query('SELECT snapshot_id, category_id, amount FROM snapshot_values');
   const { rows: incomeRows } = await p.query('SELECT id, snapshot_id, label, amount FROM income_items');
   const { rows: expenseRows } = await p.query('SELECT id, snapshot_id, label, amount FROM expense_items');
+  const { rows: consumptionRows } = await p.query(`
+    SELECT id, label, type, purchase_value AS "purchaseValue", purchase_date AS "purchaseDate",
+           depreciation_rate AS "depreciationRate", value_override AS "valueOverride",
+           override_date AS "overrideDate", notes
+    FROM consumption_assets ORDER BY sort_order
+  `);
 
   const snapshots = snapshotRows.map((s) => ({
     id: s.id,
@@ -60,10 +78,17 @@ export async function getState() {
     expenses: expenseRows.filter((r) => r.snapshot_id === s.id).map((r) => ({ id: r.id, label: r.label, amount: Number(r.amount) })),
   }));
 
-  return { categories, snapshots };
+  const consumptionAssets = consumptionRows.map((a) => ({
+    ...a,
+    purchaseValue: Number(a.purchaseValue),
+    depreciationRate: Number(a.depreciationRate),
+    valueOverride: a.valueOverride === null ? null : Number(a.valueOverride),
+  }));
+
+  return { categories, snapshots, consumptionAssets };
 }
 
-export async function saveState({ categories = [], snapshots = [] }) {
+export async function saveState({ categories = [], snapshots = [], consumptionAssets = [] }) {
   const p = getPool();
   const client = await p.connect();
   try {
@@ -73,6 +98,7 @@ export async function saveState({ categories = [], snapshots = [] }) {
     await client.query('DELETE FROM expense_items');
     await client.query('DELETE FROM snapshots');
     await client.query('DELETE FROM categories');
+    await client.query('DELETE FROM consumption_assets');
 
     for (let i = 0; i < categories.length; i++) {
       const c = categories[i];
@@ -92,6 +118,20 @@ export async function saveState({ categories = [], snapshots = [] }) {
       for (const r of s.expenses || []) {
         await client.query('INSERT INTO expense_items (id, snapshot_id, label, amount) VALUES ($1,$2,$3,$4)', [r.id, s.id, r.label || '', Number(r.amount) || 0]);
       }
+    }
+    for (let i = 0; i < consumptionAssets.length; i++) {
+      const a = consumptionAssets[i];
+      await client.query(
+        `INSERT INTO consumption_assets
+          (id, label, type, purchase_value, purchase_date, depreciation_rate, value_override, override_date, notes, sort_order)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+        [
+          a.id, a.label, a.type, Number(a.purchaseValue) || 0, a.purchaseDate,
+          Number(a.depreciationRate) || 0,
+          a.valueOverride === '' || a.valueOverride === null || a.valueOverride === undefined ? null : Number(a.valueOverride),
+          a.overrideDate || null, a.notes || '', i,
+        ]
+      );
     }
     await client.query('COMMIT');
   } catch (e) {

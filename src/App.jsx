@@ -6,7 +6,7 @@ import {
 import {
   Plus, Trash2, TrendingUp, TrendingDown, Wallet, PiggyBank, Home,
   CreditCard, Copy, LayoutGrid, PencilLine, History as HistoryIcon,
-  Settings2, Save, ArrowRight, Landmark, PieChart as PieChartIcon
+  Settings2, Save, ArrowRight, Landmark, PieChart as PieChartIcon, Layers, Car
 } from 'lucide-react';
 
 /* ---------- design tokens ---------- */
@@ -49,7 +49,7 @@ const OFFBALANCE_NOTE = 'Prati se odvojeno, ne ulazi u neto vrijednost.';
 const ASSET_CLASSES = [
   { id: 'realestate', label: 'Nekretnine', color: '#a97155', categoryIds: ['poljica'], labels: [] },
   { id: 'pension', label: 'Mirovinski', color: '#6f93cc', categoryIds: ['treciStup', 'pepp', 'mirovinski2'], labels: [] },
-  { id: 'etf', label: 'ETF (dionice/obveznice)', color: '#52a29d', categoryIds: ['trading212', 'revolut'], labels: [] },
+  { id: 'etf', label: 'ETF (dionice/obveznice)', color: '#52a29d', categoryIds: ['trading212', 'revolut'], labels: ['genius by intercapital', 'genius'] },
   { id: 'cash', label: 'Cash', color: '#c9c2a8', categoryIds: ['tekuci'], labels: ['cash is king'] },
   { id: 'shortterm', label: 'Kratkoročni novčani depoziti', color: '#8fb8a8', categoryIds: ['mmdp', 'strc'], labels: [] },
   { id: 'bitcoin', label: 'Bitcoin', color: '#e8934a', categoryIds: ['btc'], labels: [] },
@@ -73,6 +73,73 @@ const computeAssetBreakdown = (snap, categories) => {
     totals[ac.id] += Number(snap.values?.[c.id] || 0);
   });
   return ASSET_CLASSES.map((ac) => ({ ...ac, value: totals[ac.id] }));
+};
+
+// Treća "os" gledanja na iste kategorije (uz grupe iz Unosa i klase iz
+// Diverzifikacije): svaka stavka imovine je Novac (gotovina/gotovinski
+// ekvivalenti, spremno za trošenje bez gubitka vrijednosti), Proizvodna
+// imovina (raste u vrijednosti / generira prihod - dionice, mirovinski
+// fondovi, ali i store-of-value imovina poput BTC-a, zlata i srebra, te
+// zemljište kao kapitalni lever) ili Potrošna imovina (gubi vrijednost ili
+// se troši osobnom uporabom - trenutno nema default kategorije ovdje, ali
+// je dostupna za buduće). Obaveze su namjerno izostavljene, isto kao u
+// Diverzifikaciji - ovo je prikaz bruto imovine, ne neto vrijednosti.
+const WEALTH_TYPES = [
+  { id: 'cash', label: 'Novac', color: C.tealSoft, categoryIds: ['tekuci', 'mmdp', 'strc'], labels: ['cash is king'] },
+  { id: 'productive', label: 'Proizvodna imovina', color: C.gold, categoryIds: ['revolut', 'trading212', 'treciStup', 'pepp', 'mirovinski2', 'btc', 'zlato', 'srebro', 'poljica'], labels: ['genius by intercapital', 'genius', 'umjetnine', 'kolekcionarski predmeti', 'umjetnine i kolekcionarski predmeti', 'umjetnine, kolekcionarski predmeti'] },
+  { id: 'consumption', label: 'Potrošna imovina', color: C.rust, categoryIds: [], labels: [] },
+];
+const findWealthType = (category) => WEALTH_TYPES.find(
+  (wt) => wt.categoryIds.includes(category.id) || (wt.labels || []).includes((category.label || '').trim().toLowerCase())
+);
+
+const computeWealthBreakdown = (snap, categories) => {
+  if (!snap) return [];
+  const totals = Object.fromEntries(WEALTH_TYPES.map((wt) => [wt.id, 0]));
+  (categories || []).forEach((c) => {
+    const wt = findWealthType(c);
+    if (!wt) return;
+    totals[wt.id] += Number(snap.values?.[c.id] || 0);
+  });
+  return WEALTH_TYPES.map((wt) => ({ ...wt, value: totals[wt.id] }));
+};
+
+// Potrošna imovina (auto, nekretnina gdje živiš, elektronika...) se NE prati
+// mjesečno kao ostale kategorije - unosi se JEDNOM (nabavna vrijednost + datum),
+// a trenutna procijenjena vrijednost se računa automatski (amortizacija po
+// godišnjoj stopi, opadajući saldo). Za nekretninu gdje živiš amortizacija je
+// namjerno isključena (0%) jer automatska formula ne može pouzdano pogoditi
+// tržišne promjene/održavanje - umjesto toga se prikazuje podsjetnik da se
+// procjena periodički ručno revidira ("Ažuriraj procjenu").
+const CONSUMPTION_TYPES = [
+  { id: 'auto', label: 'Automobil', defaultDepreciationRate: 15, warningMonths: null },
+  { id: 'nekretnina', label: 'Nekretnina (gdje živim)', defaultDepreciationRate: 0, warningMonths: 24 },
+  { id: 'elektronika', label: 'Elektronika', defaultDepreciationRate: 25, warningMonths: null },
+  { id: 'namjestaj', label: 'Namještaj', defaultDepreciationRate: 10, warningMonths: null },
+  { id: 'nakit', label: 'Nakit (osobna uporaba)', defaultDepreciationRate: 5, warningMonths: null },
+  { id: 'plovilo', label: 'Plovilo / motor / prikolica', defaultDepreciationRate: 12, warningMonths: null },
+  { id: 'ostalo', label: 'Ostalo', defaultDepreciationRate: 10, warningMonths: null },
+];
+const findConsumptionType = (id) => CONSUMPTION_TYPES.find((t) => t.id === id) || CONSUMPTION_TYPES[CONSUMPTION_TYPES.length - 1];
+
+const monthsBetween = (fromYYYYMM, toDate) => {
+  if (!fromYYYYMM) return 0;
+  const [fy, fm] = fromYYYYMM.split('-').map(Number);
+  if (!fy || !fm) return 0;
+  return (toDate.getFullYear() - fy) * 12 + (toDate.getMonth() + 1 - fm);
+};
+
+// Ako je postavljen ručni "value override" (korisnik je ažurirao procjenu),
+// amortizacija kreće otamo (nova nulta točka), a ne od izvorne nabavne cijene.
+const computeConsumptionValue = (asset, asOf = new Date()) => {
+  const hasOverride = asset.valueOverride !== null && asset.valueOverride !== undefined && asset.valueOverride !== '';
+  const baseValue = hasOverride ? Number(asset.valueOverride) : Number(asset.purchaseValue);
+  const baseDate = hasOverride ? asset.overrideDate : asset.purchaseDate;
+  const months = Math.max(0, monthsBetween(baseDate, asOf));
+  const years = months / 12;
+  const rate = Number(asset.depreciationRate) || 0;
+  const currentValue = rate > 0 ? baseValue * Math.pow(1 - rate / 100, years) : baseValue;
+  return { currentValue: Math.max(0, currentValue), monthsSinceBase: months, baseDate, baseValue };
 };
 
 const DEFAULT_CATEGORIES = [
@@ -574,6 +641,325 @@ function Diversification({ latest, sorted, categories }) {
   );
 }
 
+function WealthType({ latest, sorted, categories, consumptionAssets }) {
+  if (!latest) {
+    return (
+      <Card style={{ padding: '48px 32px', textAlign: 'center' }}>
+        <p style={{ color: C.textMuted, fontSize: 14 }}>Unesi barem jedan mjesec da vidiš raspodjelu na novac, proizvodnu i potrošnu imovinu.</p>
+      </Card>
+    );
+  }
+
+  const consumptionTotal = (consumptionAssets || []).reduce((s, a) => s + computeConsumptionValue(a).currentValue, 0);
+
+  const breakdown = computeWealthBreakdown(latest, categories).map((b) => (
+    b.id === 'consumption' ? { ...b, value: b.value + consumptionTotal } : b
+  ));
+  const total = breakdown.reduce((s, b) => s + b.value, 0);
+
+  const trendData = sorted.map((s) => {
+    const b = computeWealthBreakdown(s, categories);
+    const row = { month: monthLabel(s.month) };
+    b.forEach((x) => { row[x.id] = Math.round(x.value); });
+    // potrošna imovina se prati odvojeno (bez mjesečne povijesti), pa se u
+    // trendu kroz vrijeme prikazuje trenutna procjena na svaki mjesec -
+    // otprilike točno za novije mjesece, manje precizno unatrag u prošlost
+    row.consumption = Math.round(row.consumption + consumptionTotal);
+    return row;
+  });
+
+  return (
+    <div className="space-y-6">
+      <Card style={{ padding: '20px 24px' }}>
+        <div className="text-xs uppercase tracking-wide" style={{ color: C.textFaint, letterSpacing: '0.08em' }}>Bruto imovina po vrsti · {monthLabelFull(latest.month)}</div>
+        <div style={{ fontFamily: 'Georgia, "Iowan Old Style", serif', fontSize: 34, color: C.text, fontVariantNumeric: 'tabular-nums', lineHeight: 1.2 }}>{fmt(total)}</div>
+        <div className="text-xs mt-1" style={{ color: C.textFaint }}>bez obaveza — Novac / Proizvodna imovina / Potrošna imovina</div>
+      </Card>
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        {breakdown.map((b) => (
+          <Card key={b.id} style={{ padding: '16px 18px', borderLeft: `3px solid ${b.color}` }}>
+            <div className="text-xs" style={{ color: C.textFaint }}>{b.label}</div>
+            <div style={{ color: C.text, fontSize: 22, fontVariantNumeric: 'tabular-nums', marginTop: 2 }}>{fmt(b.value)}</div>
+            <div className="text-xs mt-1" style={{ color: C.textFaint }}>{total ? ((b.value / total) * 100).toFixed(1) : '0.0'}% ukupne bruto imovine</div>
+          </Card>
+        ))}
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <Card style={{ padding: '20px' }}>
+          <div className="text-sm font-semibold mb-3" style={{ color: C.text }}>Raspodjela</div>
+          <ResponsiveContainer width="100%" height={240}>
+            <PieChart>
+              <Pie data={breakdown.filter((b) => b.value > 0)} dataKey="value" nameKey="label" innerRadius={60} outerRadius={95} paddingAngle={2}>
+                {breakdown.filter((b) => b.value > 0).map((e, i) => <Cell key={i} fill={e.color} stroke={C.panel} strokeWidth={2} />)}
+              </Pie>
+              <Tooltip contentStyle={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12 }} formatter={(v, n) => [fmt(v), n]} />
+            </PieChart>
+          </ResponsiveContainer>
+        </Card>
+
+        <Card style={{ padding: '20px' }}>
+          <div className="text-sm font-semibold mb-3" style={{ color: C.text }}>Kategorije po vrsti</div>
+          <div className="space-y-4">
+            {WEALTH_TYPES.map((wt) => {
+              const cats = categories.filter((c) => findWealthType(c)?.id === wt.id && Number(latest.values?.[c.id] || 0) > 0);
+              const assets = wt.id === 'consumption' ? (consumptionAssets || []) : [];
+              return (
+                <div key={wt.id}>
+                  <div className="flex items-center gap-2 text-xs font-semibold mb-1.5" style={{ color: wt.color }}>
+                    <span style={{ width: 8, height: 8, borderRadius: 999, background: wt.color, display: 'inline-block' }} />
+                    {wt.label}
+                  </div>
+                  {cats.length === 0 && assets.length === 0 && <div className="text-xs mb-2" style={{ color: C.textFaint }}>—</div>}
+                  {cats.map((c) => (
+                    <div key={c.id} className="flex items-center justify-between text-sm py-0.5">
+                      <span style={{ color: C.textMuted }}>{c.label}</span>
+                      <span style={{ color: C.text, fontVariantNumeric: 'tabular-nums' }}>{fmt(Number(latest.values[c.id]))}</span>
+                    </div>
+                  ))}
+                  {assets.map((a) => (
+                    <div key={a.id} className="flex items-center justify-between text-sm py-0.5">
+                      <span style={{ color: C.textMuted }}>{a.label}</span>
+                      <span style={{ color: C.text, fontVariantNumeric: 'tabular-nums' }}>{fmt(computeConsumptionValue(a).currentValue)}</span>
+                    </div>
+                  ))}
+                </div>
+              );
+            })}
+          </div>
+        </Card>
+      </div>
+
+      {trendData.length > 1 && (
+        <Card style={{ padding: '20px 20px 8px' }}>
+          <div className="text-sm font-semibold mb-3" style={{ color: C.text }}>Raspodjela kroz vrijeme</div>
+          <ResponsiveContainer width="100%" height={240}>
+            <BarChart data={trendData} margin={{ left: -10, right: 10 }}>
+              <CartesianGrid stroke={C.borderSoft} vertical={false} />
+              <XAxis dataKey="month" stroke={C.textFaint} tick={{ fontSize: 12 }} axisLine={{ stroke: C.border }} tickLine={false} />
+              <YAxis stroke={C.textFaint} tick={{ fontSize: 11 }} axisLine={false} tickLine={false} tickFormatter={(v) => `${Math.round(v / 1000)}k`} width={44} />
+              <Tooltip contentStyle={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12 }} formatter={(v, n) => [fmt(v), WEALTH_TYPES.find((w) => w.id === n)?.label || n]} />
+              {WEALTH_TYPES.map((wt) => (
+                <Bar key={wt.id} dataKey={wt.id} stackId="a" fill={wt.color} name={wt.id} />
+              ))}
+            </BarChart>
+          </ResponsiveContainer>
+        </Card>
+      )}
+
+      <div className="text-xs" style={{ color: C.textFaint }}>
+        Napomena: prikazane su samo kategorije mapirane u ovu podjelu (obaveze namjerno izostavljene, isto kao u Diverzifikaciji). Potrošna imovina dolazi iz posebne stranice "Potrošna imovina" (procijenjena trenutna vrijednost, ne mjesečna povijest). Ako dodaš novu kategoriju u Kategorijama, javi da je uključim ovdje.
+      </div>
+    </div>
+  );
+}
+
+function ConsumptionAssetForm({ initial, onSave, onCancel }) {
+  const [type, setType] = useState(initial?.type || 'auto');
+  const [label, setLabel] = useState(initial?.label || '');
+  const [purchaseValue, setPurchaseValue] = useState(initial?.purchaseValue ?? '');
+  const [purchaseDate, setPurchaseDate] = useState(initial?.purchaseDate || thisMonthStr());
+  const [depreciationRate, setDepreciationRate] = useState(initial?.depreciationRate ?? findConsumptionType('auto').defaultDepreciationRate);
+  const [notes, setNotes] = useState(initial?.notes || '');
+
+  const handleTypeChange = (t) => {
+    setType(t);
+    // stopu amortizacije popuni default vrijednošću tipa SAMO ako uređujemo
+    // novu stavku (kod postojeće ne diramo vec eventualno ručno prilagođenu stopu)
+    if (!initial) setDepreciationRate(findConsumptionType(t).defaultDepreciationRate);
+  };
+
+  const canSave = label.trim() && purchaseValue !== '' && !Number.isNaN(Number(purchaseValue)) && purchaseDate;
+
+  return (
+    <Card style={{ padding: '18px 20px' }}>
+      <div className="text-sm font-semibold mb-3" style={{ color: C.text }}>{initial ? 'Uredi stavku' : 'Nova stavka potrošne imovine'}</div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
+        <div>
+          <div className="text-xs mb-1" style={{ color: C.textFaint }}>Naziv</div>
+          <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="npr. VW Golf 2019"
+            className="w-full text-sm rounded-md px-2.5 py-1.5" style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.text }} />
+        </div>
+        <div>
+          <div className="text-xs mb-1" style={{ color: C.textFaint }}>Vrsta</div>
+          <select value={type} onChange={(e) => handleTypeChange(e.target.value)}
+            className="w-full text-sm rounded-md px-2.5 py-1.5" style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.text }}>
+            {CONSUMPTION_TYPES.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
+          </select>
+        </div>
+        <div>
+          <div className="text-xs mb-1" style={{ color: C.textFaint }}>Nabavna vrijednost (€)</div>
+          <input type="number" value={purchaseValue} onChange={(e) => setPurchaseValue(e.target.value)} placeholder="0"
+            className="w-full text-sm rounded-md px-2.5 py-1.5" style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.text }} />
+        </div>
+        <div>
+          <div className="text-xs mb-1" style={{ color: C.textFaint }}>Datum nabave</div>
+          <input type="month" value={purchaseDate} onChange={(e) => setPurchaseDate(e.target.value)}
+            className="w-full text-sm rounded-md px-2.5 py-1.5" style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.text }} />
+        </div>
+        <div>
+          <div className="text-xs mb-1" style={{ color: C.textFaint }}>Godišnja amortizacija (%)</div>
+          <input type="number" value={depreciationRate} onChange={(e) => setDepreciationRate(e.target.value)} placeholder="0"
+            className="w-full text-sm rounded-md px-2.5 py-1.5" style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.text }} />
+          <div className="text-xs mt-1" style={{ color: C.textFaint }}>0 = ne amortizira se automatski (npr. nekretnina gdje živiš)</div>
+        </div>
+        <div>
+          <div className="text-xs mb-1" style={{ color: C.textFaint }}>Napomena (opcionalno)</div>
+          <input value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="npr. redovni servis, lokacija..."
+            className="w-full text-sm rounded-md px-2.5 py-1.5" style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.text }} />
+        </div>
+      </div>
+      <div className="flex items-center justify-end gap-2">
+        <button onClick={onCancel} className="text-sm px-3.5 py-1.5 rounded-md" style={{ color: C.textMuted, border: `1px solid ${C.border}` }}>Odustani</button>
+        <button
+          disabled={!canSave}
+          onClick={() => onSave({
+            id: initial?.id || uid(),
+            label: label.trim(), type, purchaseValue: Number(purchaseValue), purchaseDate,
+            depreciationRate: Number(depreciationRate) || 0,
+            valueOverride: initial?.valueOverride ?? null, overrideDate: initial?.overrideDate ?? null,
+            notes: notes.trim(),
+          })}
+          className="text-sm px-4 py-1.5 rounded-md font-semibold"
+          style={{ background: canSave ? C.goldSoft : C.borderSoft, color: canSave ? C.bg : C.textFaint, cursor: canSave ? 'pointer' : 'not-allowed' }}
+        >
+          Spremi
+        </button>
+      </div>
+    </Card>
+  );
+}
+
+function ConsumptionAssetCard({ asset, onEdit, onDelete, onUpdateValuation }) {
+  const [revaluing, setRevaluing] = useState(false);
+  const [newValue, setNewValue] = useState('');
+  const t = findConsumptionType(asset.type);
+  const { currentValue, monthsSinceBase } = computeConsumptionValue(asset);
+  const hasOverride = asset.valueOverride !== null && asset.valueOverride !== undefined;
+  const stale = t.warningMonths != null && monthsSinceBase > t.warningMonths;
+  const changeFromPurchase = currentValue - Number(asset.purchaseValue);
+
+  return (
+    <Card style={{ padding: '16px 18px', borderLeft: `3px solid ${stale ? C.rust : C.borderSoft}` }}>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="text-sm font-semibold" style={{ color: C.text }}>{asset.label}</div>
+          <div className="text-xs mt-0.5" style={{ color: C.textFaint }}>
+            {t.label} · nabavljeno {monthLabel(asset.purchaseDate)} za {fmt(asset.purchaseValue)}
+            {hasOverride && <> · zadnja procjena {monthLabel(asset.overrideDate)}: {fmt(asset.valueOverride)}</>}
+          </div>
+          {asset.notes && <div className="text-xs mt-0.5" style={{ color: C.textFaint }}>{asset.notes}</div>}
+        </div>
+        <div className="text-right">
+          <div style={{ color: C.text, fontSize: 18, fontVariantNumeric: 'tabular-nums' }}>{fmt(currentValue)}</div>
+          <div className="text-xs" style={{ color: changeFromPurchase < 0 ? C.rust : C.tealSoft, fontVariantNumeric: 'tabular-nums' }}>
+            {fmtSigned(changeFromPurchase)} od nabave
+          </div>
+        </div>
+      </div>
+
+      {asset.depreciationRate > 0 && (
+        <div className="text-xs mt-2" style={{ color: C.textFaint }}>Automatska amortizacija: −{asset.depreciationRate}%/god (opadajući saldo)</div>
+      )}
+
+      {stale && (
+        <div className="text-xs mt-2 px-2.5 py-1.5 rounded-md" style={{ background: 'rgba(193,106,72,0.12)', color: C.rust, border: `1px solid ${C.rust}55` }}>
+          Zadnja procjena vrijednosti prije {monthsSinceBase} mj. — preporučamo ručnu reviziju (održavanje, tržišne promjene) svakih {t.warningMonths} mj.
+        </div>
+      )}
+
+      {revaluing ? (
+        <div className="flex items-center gap-2 mt-3">
+          <input type="number" autoFocus value={newValue} onChange={(e) => setNewValue(e.target.value)} placeholder="Nova procijenjena vrijednost (€)"
+            className="flex-1 text-sm rounded-md px-2.5 py-1.5" style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.text }} />
+          <button
+            disabled={newValue === '' || Number.isNaN(Number(newValue))}
+            onClick={() => { onUpdateValuation(asset.id, Number(newValue)); setRevaluing(false); setNewValue(''); }}
+            className="text-xs px-3 py-1.5 rounded-md font-semibold" style={{ background: C.goldSoft, color: C.bg }}
+          >Spremi</button>
+          <button onClick={() => { setRevaluing(false); setNewValue(''); }} className="text-xs px-3 py-1.5 rounded-md" style={{ color: C.textMuted, border: `1px solid ${C.border}` }}>Odustani</button>
+        </div>
+      ) : (
+        <div className="flex items-center gap-3 mt-3">
+          <button onClick={() => setRevaluing(true)} className="text-xs" style={{ color: C.tealSoft }}>Ažuriraj procjenu</button>
+          <button onClick={() => onEdit(asset)} className="text-xs" style={{ color: C.textMuted }}>Uredi</button>
+          <button onClick={() => onDelete(asset.id)} className="text-xs" style={{ color: C.textFaint }}>Obriši</button>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function ConsumptionAssets({ consumptionAssets, setConsumptionAssets }) {
+  const [adding, setAdding] = useState(false);
+  const [editingId, setEditingId] = useState(null);
+
+  const total = consumptionAssets.reduce((s, a) => s + computeConsumptionValue(a).currentValue, 0);
+  const staleCount = consumptionAssets.filter((a) => {
+    const t = findConsumptionType(a.type);
+    const { monthsSinceBase } = computeConsumptionValue(a);
+    return t.warningMonths != null && monthsSinceBase > t.warningMonths;
+  }).length;
+
+  const handleSave = (asset) => {
+    setConsumptionAssets((prev) => {
+      const exists = prev.some((a) => a.id === asset.id);
+      return exists ? prev.map((a) => (a.id === asset.id ? asset : a)) : [...prev, asset];
+    });
+    setAdding(false);
+    setEditingId(null);
+  };
+
+  const handleDelete = (id) => {
+    const a = consumptionAssets.find((x) => x.id === id);
+    const ok = window.confirm(`Obrisati "${a?.label}"? Ova radnja se ne može poništiti.`);
+    if (ok) setConsumptionAssets((prev) => prev.filter((x) => x.id !== id));
+  };
+
+  const handleUpdateValuation = (id, value) => {
+    setConsumptionAssets((prev) => prev.map((a) => (
+      a.id === id ? { ...a, valueOverride: value, overrideDate: thisMonthStr() } : a
+    )));
+  };
+
+  const editingAsset = editingId ? consumptionAssets.find((a) => a.id === editingId) : null;
+
+  return (
+    <div className="space-y-4">
+      <Card style={{ padding: '20px 24px' }}>
+        <div className="text-xs uppercase tracking-wide" style={{ color: C.textFaint, letterSpacing: '0.08em' }}>Potrošna imovina · procijenjena trenutna vrijednost</div>
+        <div style={{ fontFamily: 'Georgia, "Iowan Old Style", serif', fontSize: 34, color: C.text, fontVariantNumeric: 'tabular-nums', lineHeight: 1.2 }}>{fmt(total)}</div>
+        <div className="text-xs mt-1" style={{ color: C.textFaint }}>
+          Imovina koja se troši osobnom uporabom ili gubi vrijednost s vremenom — nije dio Neto vrijednosti (Pregled), prati se ovdje odvojeno.
+          {staleCount > 0 && <span style={{ color: C.rust }}> {staleCount} {staleCount === 1 ? 'stavka čeka' : 'stavke čekaju'} reviziju procjene.</span>}
+        </div>
+      </Card>
+
+      {!adding && !editingId && (
+        <button onClick={() => setAdding(true)} className="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md" style={{ color: C.bg, background: C.goldSoft }}>
+          <Plus size={13} /> Dodaj stavku
+        </button>
+      )}
+
+      {adding && <ConsumptionAssetForm onSave={handleSave} onCancel={() => setAdding(false)} />}
+      {editingAsset && <ConsumptionAssetForm initial={editingAsset} onSave={handleSave} onCancel={() => setEditingId(null)} />}
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        {consumptionAssets.map((a) => (
+          <ConsumptionAssetCard key={a.id} asset={a} onEdit={(x) => setEditingId(x.id)} onDelete={handleDelete} onUpdateValuation={handleUpdateValuation} />
+        ))}
+      </div>
+
+      {consumptionAssets.length === 0 && !adding && (
+        <Card style={{ padding: '32px', textAlign: 'center' }}>
+          <p className="text-sm" style={{ color: C.textMuted }}>Nema unesenih stavki. Dodaj auto, nekretninu gdje živiš, elektroniku i sl. — vrijednost se dalje prati automatski.</p>
+        </Card>
+      )}
+    </div>
+  );
+}
+
 function MonthPickerModal({ existingMonths, onConfirm, onCancel }) {
   const now = new Date();
   const [y, setY] = useState(now.getFullYear());
@@ -624,6 +1010,7 @@ function MonthPickerModal({ existingMonths, onConfirm, onCancel }) {
 export default function App() {
   const [categories, setCategories] = useState(DEFAULT_CATEGORIES);
   const [snapshots, setSnapshots] = useState([]);
+  const [consumptionAssets, setConsumptionAssets] = useState([]);
   const [loaded, setLoaded] = useState(false);
   const [tab, setTab] = useState('pregled');
   const [draft, setDraft] = useState(null);
@@ -644,6 +1031,7 @@ export default function App() {
         if (cancelled) return;
         if (parsed.categories && parsed.categories.length) setCategories(parsed.categories);
         if (parsed.snapshots) setSnapshots(parsed.snapshots);
+        if (parsed.consumptionAssets) setConsumptionAssets(parsed.consumptionAssets);
         setLoaded(true);
       } catch (e) {
         if (cancelled) return;
@@ -671,7 +1059,7 @@ export default function App() {
             // ovdje je uvijek namjerno (korisnik je stvarno obrisao sve).
             'X-Confirm-Wipe': snapshots.length === 0 ? 'true' : 'false',
           },
-          body: JSON.stringify({ categories, snapshots }),
+          body: JSON.stringify({ categories, snapshots, consumptionAssets }),
         });
         if (!res.ok) throw new Error('save failed');
       } catch (e) {
@@ -679,7 +1067,7 @@ export default function App() {
         setTimeout(() => setNotice(''), 4500);
       }
     })();
-  }, [categories, snapshots, loaded]);
+  }, [categories, snapshots, consumptionAssets, loaded]);
 
   const sorted = useMemo(() => [...snapshots].sort((a, b) => a.month.localeCompare(b.month)), [snapshots]);
 
@@ -767,6 +1155,8 @@ export default function App() {
             <TabButton id="povijest" label="Povijest" icon={HistoryIcon} activeTab={tab} onSelect={setTab} />
             <TabButton id="kategorije" label="Kategorije" icon={Settings2} activeTab={tab} onSelect={setTab} />
             <TabButton id="diverzifikacija" label="Diverzifikacija" icon={PieChartIcon} activeTab={tab} onSelect={setTab} />
+            <TabButton id="vrstaImovine" label="Vrsta imovine" icon={Layers} activeTab={tab} onSelect={setTab} />
+            <TabButton id="potrosnaImovina" label="Potrošna imovina" icon={Car} activeTab={tab} onSelect={setTab} />
           </div>
         </div>
 
@@ -803,6 +1193,12 @@ export default function App() {
         )}
         {tab === 'diverzifikacija' && (
           <Diversification latest={latest} sorted={sorted} categories={categories} />
+        )}
+        {tab === 'vrstaImovine' && (
+          <WealthType latest={latest} sorted={sorted} categories={categories} consumptionAssets={consumptionAssets} />
+        )}
+        {tab === 'potrosnaImovina' && (
+          <ConsumptionAssets consumptionAssets={consumptionAssets} setConsumptionAssets={setConsumptionAssets} />
         )}
       </div>
     </div>
