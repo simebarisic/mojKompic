@@ -84,9 +84,16 @@ const computeAssetBreakdown = (snap, categories) => {
 // se troši osobnom uporabom - trenutno nema default kategorije ovdje, ali
 // je dostupna za buduće). Obaveze su namjerno izostavljene, isto kao u
 // Diverzifikaciji - ovo je prikaz bruto imovine, ne neto vrijednosti.
+// POPRAVAK (kolovoz 2026., prema "Bitcoin kao novac", pogl. "Ravnoteža imovine",
+// str. 91-99): knjiga eksplicitno kaze "Bitcoin u dugorocnom dijelu bilance
+// tretirajte kao novac" (str. 99), a zlato kroz cijelu knjigu naziva "tvrdim
+// novcem" (npr. str. 725) - isti test kao za BTC (drzi se radi ocuvanja
+// kupovne moci i buduce razmjene, ne stvara prihod). Srebro slijedi istu logiku
+// kao zlato. STRC/dionice/fondovi ostaju Proizvodna - knjiga ih izricito grupira
+// s poslom/opremom/zemljistem kao investicijsku kategoriju (str. 121).
 const WEALTH_TYPES = [
-  { id: 'cash', label: 'Novac', color: C.tealSoft, categoryIds: ['tekuci', 'mmdp'], labels: ['cash is king'] },
-  { id: 'productive', label: 'Proizvodna imovina', color: C.gold, categoryIds: ['revolut', 'trading212', 'treciStup', 'pepp', 'mirovinski2', 'btc', 'zlato', 'srebro', 'poljica', 'strc'], labels: ['genius by intercapital', 'genius', 'umjetnine', 'kolekcionarski predmeti', 'umjetnine i kolekcionarski predmeti', 'umjetnine, kolekcionarski predmeti'] },
+  { id: 'cash', label: 'Novac', color: C.tealSoft, categoryIds: ['tekuci', 'mmdp', 'btc', 'zlato', 'srebro'], labels: ['cash is king'] },
+  { id: 'productive', label: 'Proizvodna imovina', color: C.gold, categoryIds: ['revolut', 'trading212', 'treciStup', 'pepp', 'mirovinski2', 'poljica', 'strc'], labels: ['genius by intercapital', 'genius', 'umjetnine', 'kolekcionarski predmeti', 'umjetnine i kolekcionarski predmeti', 'umjetnine, kolekcionarski predmeti'] },
   { id: 'consumption', label: 'Potrošna imovina', color: C.rust, categoryIds: [], labels: [] },
 ];
 const findWealthType = (category) => WEALTH_TYPES.find(
@@ -686,6 +693,35 @@ function WealthType({ latest, sorted, categories, consumptionAssets }) {
         ))}
       </div>
 
+      <Card style={{ padding: '20px' }}>
+        <div className="text-sm font-semibold mb-1" style={{ color: C.text }}>Pravilo trećina</div>
+        <div className="text-xs mb-4" style={{ color: C.textFaint }}>
+          Prema "Bitcoin kao novac" (str. 94): ciljaj barem trećinu u novcu, a proizvodna i potrošna imovina pojedinačno neka ne prelaze trećinu. Ovo je orijentir, ne formula — signal da razumiješ gdje si izložen, ne nalog da odmah nešto prodaš.
+        </div>
+        <div className="space-y-4">
+          {breakdown.map((b) => {
+            const pct = total ? (b.value / total) * 100 : 0;
+            const isCash = b.id === 'cash';
+            const threshold = 100 / 3;
+            const ok = isCash ? pct >= threshold : pct <= threshold;
+            return (
+              <div key={b.id}>
+                <div className="flex items-center justify-between text-xs mb-1">
+                  <span style={{ color: C.textMuted }}>{b.label}</span>
+                  <span style={{ color: ok ? C.tealSoft : C.rust, fontWeight: 600 }}>
+                    {pct.toFixed(1)}% {ok ? '· unutar pravila' : isCash ? '· ispod trećine — signal' : '· iznad trećine — signal'}
+                  </span>
+                </div>
+                <div style={{ position: 'relative', height: 10, borderRadius: 999, background: C.borderSoft, overflow: 'hidden' }}>
+                  <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: `${Math.min(100, pct)}%`, background: ok ? b.color : C.rust, borderRadius: 999, transition: 'width 0.3s ease' }} />
+                  <div title="33,3%" style={{ position: 'absolute', left: `${threshold}%`, top: -2, bottom: -2, width: 2, background: C.text, opacity: 0.35 }} />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </Card>
+
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <Card style={{ padding: '20px' }}>
           <div className="text-sm font-semibold mb-3" style={{ color: C.text }}>Raspodjela</div>
@@ -749,7 +785,7 @@ function WealthType({ latest, sorted, categories, consumptionAssets }) {
       )}
 
       <div className="text-xs" style={{ color: C.textFaint }}>
-        Napomena: prikazane su samo kategorije mapirane u ovu podjelu (obaveze namjerno izostavljene, isto kao u Diverzifikaciji). Potrošna imovina dolazi iz posebne stranice "Potrošna imovina" (procijenjena trenutna vrijednost, ne mjesečna povijest). Ako dodaš novu kategoriju u Kategorijama, javi da je uključim ovdje.
+        Napomena: prikazane su samo kategorije mapirane u ovu podjelu (obaveze namjerno izostavljene, isto kao u Diverzifikaciji). Potrošna imovina dolazi iz posebne stranice "Potrošna imovina" (procijenjena trenutna vrijednost, ne mjesečna povijest). Poljica je uvrštena u Proizvodnu imovinu, ali prema "Bitcoin kao novac" (str. 92) zemljište je produktivno tek kad se stvarno obrađuje ili iznajmljuje — dok je neizgrađeno/spekulativno, vrijedi ga povremeno preispitati "zaslužuje li svoje mjesto" naspram držanja Bitcoina. Ako dodaš novu kategoriju u Kategorijama, javi da je uključim ovdje.
       </div>
     </div>
   );
