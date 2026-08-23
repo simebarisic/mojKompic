@@ -49,9 +49,9 @@ const OFFBALANCE_NOTE = 'Prati se odvojeno, ne ulazi u neto vrijednost.';
 const ASSET_CLASSES = [
   { id: 'realestate', label: 'Nekretnine', color: '#a97155', categoryIds: ['poljica'], labels: [] },
   { id: 'pension', label: 'Mirovinski', color: '#6f93cc', categoryIds: ['treciStup', 'pepp', 'mirovinski2'], labels: [] },
-  { id: 'etf', label: 'ETF (dionice/obveznice)', color: '#52a29d', categoryIds: ['trading212', 'revolut'], labels: ['genius by intercapital', 'genius'] },
+  { id: 'etf', label: 'ETF (dionice/obveznice)', color: '#52a29d', categoryIds: ['trading212', 'revolut', 'strc'], labels: ['genius by intercapital', 'genius'] },
   { id: 'cash', label: 'Cash', color: '#c9c2a8', categoryIds: ['tekuci'], labels: ['cash is king'] },
-  { id: 'shortterm', label: 'Kratkoročni novčani depoziti', color: '#8fb8a8', categoryIds: ['mmdp', 'strc'], labels: [] },
+  { id: 'shortterm', label: 'Kratkoročni novčani depoziti', color: '#8fb8a8', categoryIds: ['mmdp'], labels: [] },
   { id: 'bitcoin', label: 'Bitcoin', color: '#e8934a', categoryIds: ['btc'], labels: [] },
   { id: 'gold', label: 'Zlato', color: '#d4af37', categoryIds: ['zlato'], labels: [] },
   { id: 'silver', label: 'Srebro', color: '#b8bec7', categoryIds: ['srebro'], labels: [] },
@@ -85,8 +85,8 @@ const computeAssetBreakdown = (snap, categories) => {
 // je dostupna za buduće). Obaveze su namjerno izostavljene, isto kao u
 // Diverzifikaciji - ovo je prikaz bruto imovine, ne neto vrijednosti.
 const WEALTH_TYPES = [
-  { id: 'cash', label: 'Novac', color: C.tealSoft, categoryIds: ['tekuci', 'mmdp', 'strc'], labels: ['cash is king'] },
-  { id: 'productive', label: 'Proizvodna imovina', color: C.gold, categoryIds: ['revolut', 'trading212', 'treciStup', 'pepp', 'mirovinski2', 'btc', 'zlato', 'srebro', 'poljica'], labels: ['genius by intercapital', 'genius', 'umjetnine', 'kolekcionarski predmeti', 'umjetnine i kolekcionarski predmeti', 'umjetnine, kolekcionarski predmeti'] },
+  { id: 'cash', label: 'Novac', color: C.tealSoft, categoryIds: ['tekuci', 'mmdp'], labels: ['cash is king'] },
+  { id: 'productive', label: 'Proizvodna imovina', color: C.gold, categoryIds: ['revolut', 'trading212', 'treciStup', 'pepp', 'mirovinski2', 'btc', 'zlato', 'srebro', 'poljica', 'strc'], labels: ['genius by intercapital', 'genius', 'umjetnine', 'kolekcionarski predmeti', 'umjetnine i kolekcionarski predmeti', 'umjetnine, kolekcionarski predmeti'] },
   { id: 'consumption', label: 'Potrošna imovina', color: C.rust, categoryIds: [], labels: [] },
 ];
 const findWealthType = (category) => WEALTH_TYPES.find(
