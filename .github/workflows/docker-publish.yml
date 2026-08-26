@@ -48,3 +48,25 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  deploy:
+    needs: build-and-push
+    runs-on: self-hosted
+    steps:
+      - name: Checkout koda
+        uses: actions/checkout@v4
+
+      - name: Prijava na GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Povuci najnoviju sliku i podigni servise
+        run: |
+          docker compose --env-file /opt/moj-kompic/.env -f docker-compose.prod.yml pull
+          docker compose --env-file /opt/moj-kompic/.env -f docker-compose.prod.yml up -d --remove-orphans
+
+      - name: Počisti stare Docker slike
+        run: docker image prune -f
