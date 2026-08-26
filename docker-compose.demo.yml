@@ -1,0 +1,51 @@
+# Potpuno odvojena instanca za demo/pokazivanje aplikacije - vlastita baza
+# (drugi volumen), vlastiti port, ne dira produkcijsku bazu iz docker-compose.yml.
+#
+# Prvi put (napuni demo bazu mock podacima):
+#   docker compose -f docker-compose.demo.yml up -d db-demo
+#   docker compose -f docker-compose.demo.yml run --rm seed-demo
+#   docker compose -f docker-compose.demo.yml up -d app-demo
+#
+# Ubuduće (baza je već napunjena, samo pokreni app):
+#   docker compose -f docker-compose.demo.yml up -d db-demo app-demo
+#
+# Demo aplikacija je na http://localhost:3002 (produkcija iz docker-compose.yml
+# ostaje na 3001, posve neovisno - obje mogu raditi istovremeno).
+#
+# Reset demo podataka (obriši i ponovno napuni):
+#   docker compose -f docker-compose.demo.yml down -v
+#   pa ponovi korake "Prvi put" iznad.
+
+services:
+  db-demo:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: kompic_demo
+      POSTGRES_USER: kompic_demo
+      POSTGRES_PASSWORD: change-me-demo
+    volumes:
+      - kompic_demo_db_data:/var/lib/postgresql/data
+
+  seed-demo:
+    build: .
+    depends_on:
+      - db-demo
+    environment:
+      DATABASE_URL: postgres://kompic_demo:change-me-demo@db-demo:5432/kompic_demo
+    command: ["node", "scripts/seed-demo.js"]
+    # nema "restart" i nema "ports" - ovo je one-off zadatak, ne servis koji stalno radi
+
+  app-demo:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      - db-demo
+    environment:
+      DATABASE_URL: postgres://kompic_demo:change-me-demo@db-demo:5432/kompic_demo
+      PORT: 3001
+    ports:
+      - "3002:3001"
+
+volumes:
+  kompic_demo_db_data:

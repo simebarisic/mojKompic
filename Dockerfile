@@ -16,6 +16,7 @@ COPY package*.json ./
 RUN npm install --omit=dev
 COPY server.js ./
 COPY db ./db
+COPY scripts ./scripts
 COPY --from=build /app/dist ./dist
 
 EXPOSE 3001

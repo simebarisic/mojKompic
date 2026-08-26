@@ -6,7 +6,8 @@ import {
 import {
   Plus, Trash2, TrendingUp, TrendingDown, Wallet, PiggyBank, Home,
   CreditCard, Copy, LayoutGrid, PencilLine, History as HistoryIcon,
-  Settings2, Save, ArrowRight, Landmark, PieChart as PieChartIcon, Layers, Car
+  Settings2, Save, ArrowRight, Landmark, PieChart as PieChartIcon, Layers, Car,
+  Eye, EyeOff
 } from 'lucide-react';
 
 /* ---------- design tokens ---------- */
@@ -173,6 +174,11 @@ const uid = () => Math.random().toString(36).slice(2, 9);
 const fmt0 = (n) => new Intl.NumberFormat('hr-HR', { maximumFractionDigits: 0 }).format(Math.round(n || 0));
 const fmt = (n) => fmt0(n) + ' €';
 const fmtSigned = (n) => (n >= 0 ? '+' : '') + fmt(n);
+const MASK = '•••••••';
+// mFmt/mFmtSigned: isto kao fmt/fmtSigned, ali kad je "hide" true vraćaju
+// maskirani placeholder umjesto stvarnog iznosa (koristi se za privacy mod).
+const mFmt = (hide, n) => (hide ? MASK : fmt(n));
+const mFmtSigned = (hide, n) => (hide ? MASK : fmtSigned(n));
 const monthLabel = (m) => { const [y, mo] = m.split('-').map(Number); return `${MONTHS_HR[mo - 1]} ${String(y).slice(2)}`; };
 const monthLabelFull = (m) => { const [y, mo] = m.split('-').map(Number); return `${MONTHS_HR_FULL[mo - 1]} ${y}`; };
 const thisMonthStr = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; };
@@ -229,7 +235,44 @@ function TabButton({ id, label, icon: Icon, activeTab, onSelect }) {
   );
 }
 
-function LineRow({ keyName, placeholder, draft, setDraft }) {
+// Gumb za skrivanje/prikazivanje iznosa. "on" prop koristi se i za stranične
+// gumbe (skriva samo tu stranicu) i za glavni gumb u headeru (skriva cijelu
+// aplikaciju) - ponašanje razlikuje App komponenta kroz onToggle callback.
+function PrivacyButton({ on, onToggle, label = 'iznose', size = 'sm' }) {
+  const isMain = size === 'md';
+  return (
+    <button
+      onClick={onToggle}
+      className="inline-flex items-center gap-1.5 rounded-md transition-colors"
+      style={{
+        fontSize: isMain ? 13 : 12,
+        padding: isMain ? '7px 12px' : '5px 9px',
+        color: on ? C.bg : C.textMuted,
+        background: on ? C.goldSoft : C.surface,
+        border: `1px solid ${on ? C.goldSoft : C.border}`,
+        fontWeight: on ? 600 : 500,
+      }}
+      title={on ? `Prikaži ${label}` : `Sakrij ${label}`}
+    >
+      {on ? <EyeOff size={isMain ? 15 : 13} /> : <Eye size={isMain ? 15 : 13} />}
+      {on ? 'Sakriveno' : 'Sakrij'}
+    </button>
+  );
+}
+
+// Zamotava grafove/vizualne prikaze koji se ne mogu jednostavno tekstualno
+// maskirati (recharts) - kad je "on", cijeli sadržaj se zamuti i onemogući
+// hover (da se iznosi ne otkriju kroz tooltip).
+function ChartMask({ on, children }) {
+  if (!on) return children;
+  return (
+    <div style={{ filter: 'blur(7px)', pointerEvents: 'none', userSelect: 'none' }}>
+      {children}
+    </div>
+  );
+}
+
+function LineRow({ keyName, placeholder, draft, setDraft, hide }) {
   return (
     <div className="space-y-2">
       {(draft[keyName] || []).map((row) => (
@@ -245,7 +288,7 @@ function LineRow({ keyName, placeholder, draft, setDraft }) {
             value={row.amount}
             onChange={(e) => setDraft({ ...draft, [keyName]: draft[keyName].map((r) => r.id === row.id ? { ...r, amount: e.target.value } : r) })}
             placeholder="0" className="w-28 text-sm rounded-md px-2.5 py-1.5 text-right"
-            style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.text, fontVariantNumeric: 'tabular-nums' }}
+            style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.text, fontVariantNumeric: 'tabular-nums', filter: hide ? 'blur(5px)' : 'none' }}
           />
           <button onClick={() => setDraft({ ...draft, [keyName]: draft[keyName].filter((r) => r.id !== row.id) })} style={{ color: C.textFaint }}><Trash2 size={15} /></button>
         </div>
@@ -260,9 +303,14 @@ function LineRow({ keyName, placeholder, draft, setDraft }) {
   );
 }
 
-function Overview({ latest, latestT, previous, momChange, momPct, chartData, liquidPie, totalPie, onStartDraft }) {
+function Overview({ latest, latestT, previous, momChange, momPct, chartData, liquidPie, totalPie, onStartDraft, hide, onToggleHide }) {
   return (
     <div className="space-y-6">
+      {latest && (
+        <div className="flex justify-end -mb-2">
+          <PrivacyButton on={hide} onToggle={onToggleHide} label="iznose na ovoj stranici" />
+        </div>
+      )}
       {!latest ? (
         <Card style={{ padding: '48px 32px', textAlign: 'center' }}>
           <p style={{ fontFamily: 'Georgia, "Iowan Old Style", serif', fontSize: 22, color: C.text, marginBottom: 8 }}>Knjiga je još prazna.</p>
@@ -278,17 +326,17 @@ function Overview({ latest, latestT, previous, momChange, momPct, chartData, liq
               <div>
                 <div className="text-xs uppercase tracking-wide" style={{ color: C.textFaint, letterSpacing: '0.08em' }}>Neto vrijednost · {monthLabelFull(latest.month)}</div>
                 <div style={{ fontFamily: 'Georgia, "Iowan Old Style", serif', fontSize: 44, color: C.text, fontVariantNumeric: 'tabular-nums', lineHeight: 1.15 }}>
-                  {fmt(latestT.netTotal)}
+                  {mFmt(hide, latestT.netTotal)}
                 </div>
                 <div className="text-sm mt-1" style={{ color: C.textMuted }}>
-                  od čega likvidno (bez nekretnina): <span style={{ color: C.text, fontVariantNumeric: 'tabular-nums' }}>{fmt(latestT.netLiquid)}</span>
+                  od čega likvidno (bez nekretnina): <span style={{ color: C.text, fontVariantNumeric: 'tabular-nums' }}>{mFmt(hide, latestT.netLiquid)}</span>
                 </div>
               </div>
               {momChange !== null && (
                 <div className="rounded-md px-3.5 py-2.5 flex items-center gap-2" style={{ background: momChange >= 0 ? 'rgba(82,162,157,0.12)' : 'rgba(193,106,72,0.12)', border: `1px solid ${momChange >= 0 ? C.teal : C.rust}55` }}>
                   {momChange >= 0 ? <TrendingUp size={16} color={C.teal} /> : <TrendingDown size={16} color={C.rust} />}
                   <div>
-                    <div style={{ color: momChange >= 0 ? C.tealSoft : C.rust, fontWeight: 600, fontSize: 14, fontVariantNumeric: 'tabular-nums' }}>{fmtSigned(momChange)}</div>
+                    <div style={{ color: momChange >= 0 ? C.tealSoft : C.rust, fontWeight: 600, fontSize: 14, fontVariantNumeric: 'tabular-nums' }}>{mFmtSigned(hide, momChange)}</div>
                     <div style={{ color: C.textFaint, fontSize: 11 }}>u odnosu na {monthLabel(previous.month)}{momPct !== null ? ` · ${momPct >= 0 ? '+' : ''}${momPct.toFixed(1)}%` : ''}</div>
                   </div>
                 </div>
@@ -305,7 +353,7 @@ function Overview({ latest, latestT, previous, momChange, momPct, chartData, liq
             ].map((s) => (
               <Card key={s.label} style={{ padding: '14px 16px', borderLeft: `3px solid ${s.color}` }}>
                 <div className="text-xs" style={{ color: C.textFaint }}>{s.label}</div>
-                <div style={{ color: C.text, fontSize: 19, fontVariantNumeric: 'tabular-nums', marginTop: 2 }}>{fmt(s.value)}</div>
+                <div style={{ color: C.text, fontSize: 19, fontVariantNumeric: 'tabular-nums', marginTop: 2 }}>{mFmt(hide, s.value)}</div>
               </Card>
             ))}
           </div>
@@ -313,78 +361,86 @@ function Overview({ latest, latestT, previous, momChange, momPct, chartData, liq
           {latestT.offbalance > 0 && (
             <div className="flex items-center gap-2 px-3.5 py-2 rounded-md text-sm" style={{ border: `1px dashed ${C.violet}66`, color: C.violet }}>
               <Landmark size={14} />
-              <span>Vanbilanca: <span style={{ fontVariantNumeric: 'tabular-nums', fontWeight: 600 }}>{fmt(latestT.offbalance)}</span></span>
+              <span>Vanbilanca: <span style={{ fontVariantNumeric: 'tabular-nums', fontWeight: 600 }}>{mFmt(hide, latestT.offbalance)}</span></span>
               <span style={{ color: C.textFaint, fontSize: 12 }}>· {OFFBALANCE_NOTE}</span>
             </div>
           )}
 
           <Card style={{ padding: '20px 20px 8px' }}>
             <div className="text-sm font-semibold mb-3" style={{ color: C.text }}>Neto vrijednost kroz vrijeme</div>
-            <ResponsiveContainer width="100%" height={260}>
-              <AreaChart data={chartData} margin={{ left: -10, right: 10 }}>
-                <defs>
-                  <linearGradient id="gTotal" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor={C.gold} stopOpacity={0.35} />
-                    <stop offset="100%" stopColor={C.gold} stopOpacity={0} />
-                  </linearGradient>
-                  <linearGradient id="gLiquid" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor={C.teal} stopOpacity={0.35} />
-                    <stop offset="100%" stopColor={C.teal} stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid stroke={C.borderSoft} vertical={false} />
-                <XAxis dataKey="month" stroke={C.textFaint} tick={{ fontSize: 12 }} axisLine={{ stroke: C.border }} tickLine={false} />
-                <YAxis stroke={C.textFaint} tick={{ fontSize: 11 }} axisLine={false} tickLine={false} tickFormatter={(v) => `${Math.round(v / 1000)}k`} width={44} />
-                <Tooltip contentStyle={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12 }} labelStyle={{ color: C.text }} formatter={(v, n) => [fmt(v), n === 'total' ? 'Ukupno' : 'Likvidno']} />
-                <Area type="monotone" dataKey="total" stroke={C.goldSoft} fill="url(#gTotal)" strokeWidth={2} name="total" />
-                <Area type="monotone" dataKey="liquid" stroke={C.tealSoft} fill="url(#gLiquid)" strokeWidth={2} name="liquid" />
-              </AreaChart>
-            </ResponsiveContainer>
+            <ChartMask on={hide}>
+              <ResponsiveContainer width="100%" height={260}>
+                <AreaChart data={chartData} margin={{ left: -10, right: 10 }}>
+                  <defs>
+                    <linearGradient id="gTotal" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor={C.gold} stopOpacity={0.35} />
+                      <stop offset="100%" stopColor={C.gold} stopOpacity={0} />
+                    </linearGradient>
+                    <linearGradient id="gLiquid" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor={C.teal} stopOpacity={0.35} />
+                      <stop offset="100%" stopColor={C.teal} stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid stroke={C.borderSoft} vertical={false} />
+                  <XAxis dataKey="month" stroke={C.textFaint} tick={{ fontSize: 12 }} axisLine={{ stroke: C.border }} tickLine={false} />
+                  <YAxis stroke={C.textFaint} tick={{ fontSize: 11 }} axisLine={false} tickLine={false} tickFormatter={(v) => `${Math.round(v / 1000)}k`} width={44} />
+                  <Tooltip contentStyle={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12 }} labelStyle={{ color: C.text }} formatter={(v, n) => [mFmt(hide, v), n === 'total' ? 'Ukupno' : 'Likvidno']} />
+                  <Area type="monotone" dataKey="total" stroke={C.goldSoft} fill="url(#gTotal)" strokeWidth={2} name="total" />
+                  <Area type="monotone" dataKey="liquid" stroke={C.tealSoft} fill="url(#gLiquid)" strokeWidth={2} name="liquid" />
+                </AreaChart>
+              </ResponsiveContainer>
+            </ChartMask>
           </Card>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <Card style={{ padding: '20px' }}>
               <div className="text-sm font-semibold mb-1" style={{ color: C.text }}>Likvidna imovina</div>
               <div className="text-xs mb-2" style={{ color: C.textFaint }}>bez nekretnina · sastav portfelja</div>
-              <ResponsiveContainer width="100%" height={220}>
-                <PieChart>
-                  <Pie data={liquidPie} dataKey="value" nameKey="name" innerRadius={55} outerRadius={82} paddingAngle={2}>
-                    {liquidPie.map((e, i) => <Cell key={i} fill={e.color} stroke={C.panel} strokeWidth={2} />)}
-                  </Pie>
-                  <Tooltip contentStyle={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12 }} formatter={(v, n) => [fmt(v), n]} />
-                </PieChart>
-              </ResponsiveContainer>
-              <div className="text-center -mt-1" style={{ color: C.tealSoft, fontVariantNumeric: 'tabular-nums', fontWeight: 600 }}>{fmt(latestT.netLiquid)}</div>
+              <ChartMask on={hide}>
+                <ResponsiveContainer width="100%" height={220}>
+                  <PieChart>
+                    <Pie data={liquidPie} dataKey="value" nameKey="name" innerRadius={55} outerRadius={82} paddingAngle={2}>
+                      {liquidPie.map((e, i) => <Cell key={i} fill={e.color} stroke={C.panel} strokeWidth={2} />)}
+                    </Pie>
+                    <Tooltip contentStyle={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12 }} formatter={(v, n) => [mFmt(hide, v), n]} />
+                  </PieChart>
+                </ResponsiveContainer>
+              </ChartMask>
+              <div className="text-center -mt-1" style={{ color: C.tealSoft, fontVariantNumeric: 'tabular-nums', fontWeight: 600 }}>{mFmt(hide, latestT.netLiquid)}</div>
             </Card>
             <Card style={{ padding: '20px' }}>
               <div className="text-sm font-semibold mb-1" style={{ color: C.text }}>Ukupna neto vrijednost</div>
               <div className="text-xs mb-2" style={{ color: C.textFaint }}>uključujući nekretnine</div>
-              <ResponsiveContainer width="100%" height={220}>
-                <PieChart>
-                  <Pie data={totalPie} dataKey="value" nameKey="name" innerRadius={55} outerRadius={82} paddingAngle={2}>
-                    {totalPie.map((e, i) => <Cell key={i} fill={e.color} stroke={C.panel} strokeWidth={2} />)}
-                  </Pie>
-                  <Tooltip contentStyle={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12 }} formatter={(v, n) => [fmt(v), n]} />
-                </PieChart>
-              </ResponsiveContainer>
-              <div className="text-center -mt-1" style={{ color: C.goldSoft, fontVariantNumeric: 'tabular-nums', fontWeight: 600 }}>{fmt(latestT.netTotal)}</div>
-              {latestT.liability > 0 && <div className="text-center text-xs mt-1" style={{ color: C.rust }}>uključene obaveze: −{fmt(latestT.liability)}</div>}
+              <ChartMask on={hide}>
+                <ResponsiveContainer width="100%" height={220}>
+                  <PieChart>
+                    <Pie data={totalPie} dataKey="value" nameKey="name" innerRadius={55} outerRadius={82} paddingAngle={2}>
+                      {totalPie.map((e, i) => <Cell key={i} fill={e.color} stroke={C.panel} strokeWidth={2} />)}
+                    </Pie>
+                    <Tooltip contentStyle={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12 }} formatter={(v, n) => [mFmt(hide, v), n]} />
+                  </PieChart>
+                </ResponsiveContainer>
+              </ChartMask>
+              <div className="text-center -mt-1" style={{ color: C.goldSoft, fontVariantNumeric: 'tabular-nums', fontWeight: 600 }}>{mFmt(hide, latestT.netTotal)}</div>
+              {latestT.liability > 0 && <div className="text-center text-xs mt-1" style={{ color: C.rust }}>uključene obaveze: −{mFmt(hide, latestT.liability)}</div>}
             </Card>
           </div>
 
           {chartData.length > 1 && (
             <Card style={{ padding: '20px 20px 8px' }}>
               <div className="text-sm font-semibold mb-3" style={{ color: C.text }}>Prihodi i rashodi po mjesecu</div>
-              <ResponsiveContainer width="100%" height={200}>
-                <BarChart data={chartData} margin={{ left: -10, right: 10 }}>
-                  <CartesianGrid stroke={C.borderSoft} vertical={false} />
-                  <XAxis dataKey="month" stroke={C.textFaint} tick={{ fontSize: 12 }} axisLine={{ stroke: C.border }} tickLine={false} />
-                  <YAxis stroke={C.textFaint} tick={{ fontSize: 11 }} axisLine={false} tickLine={false} tickFormatter={(v) => `${Math.round(v / 1000)}k`} width={44} />
-                  <Tooltip contentStyle={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12 }} formatter={(v, n) => [fmt(v), n === 'income' ? 'Prihod' : 'Rashod']} />
-                  <Bar dataKey="income" fill={C.teal} radius={[3, 3, 0, 0]} name="income" />
-                  <Bar dataKey="expense" fill={C.rust} radius={[3, 3, 0, 0]} name="expense" />
-                </BarChart>
-              </ResponsiveContainer>
+              <ChartMask on={hide}>
+                <ResponsiveContainer width="100%" height={200}>
+                  <BarChart data={chartData} margin={{ left: -10, right: 10 }}>
+                    <CartesianGrid stroke={C.borderSoft} vertical={false} />
+                    <XAxis dataKey="month" stroke={C.textFaint} tick={{ fontSize: 12 }} axisLine={{ stroke: C.border }} tickLine={false} />
+                    <YAxis stroke={C.textFaint} tick={{ fontSize: 11 }} axisLine={false} tickLine={false} tickFormatter={(v) => `${Math.round(v / 1000)}k`} width={44} />
+                    <Tooltip contentStyle={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12 }} formatter={(v, n) => [mFmt(hide, v), n === 'income' ? 'Prihod' : 'Rashod']} />
+                    <Bar dataKey="income" fill={C.teal} radius={[3, 3, 0, 0]} name="income" />
+                    <Bar dataKey="expense" fill={C.rust} radius={[3, 3, 0, 0]} name="expense" />
+                  </BarChart>
+                </ResponsiveContainer>
+              </ChartMask>
             </Card>
           )}
         </>
@@ -393,7 +449,7 @@ function Overview({ latest, latestT, previous, momChange, momPct, chartData, liq
   );
 }
 
-function Entry({ draft, setDraft, categories, previous, sorted, onSave, onStartDraft }) {
+function Entry({ draft, setDraft, categories, previous, sorted, onSave, onStartDraft, hide, onToggleHide }) {
   if (!draft) {
     return (
       <Card style={{ padding: '40px 28px', textAlign: 'center' }}>
@@ -412,6 +468,9 @@ function Entry({ draft, setDraft, categories, previous, sorted, onSave, onStartD
 
   return (
     <div className="space-y-6">
+      <div className="flex justify-end">
+        <PrivacyButton on={hide} onToggle={onToggleHide} label="iznose na ovoj stranici" />
+      </div>
       <Card style={{ padding: '20px' }}>
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2">
@@ -443,7 +502,7 @@ function Entry({ draft, setDraft, categories, previous, sorted, onSave, onStartD
             <Card key={g} style={{ padding: '16px 18px', borderLeft: `3px solid ${meta.color}` }}>
               <div className="flex items-center justify-between mb-1">
                 <div className="flex items-center gap-2 text-sm font-semibold" style={{ color: C.text }}><Icon size={15} color={meta.color} /> {meta.label}</div>
-                <div className="text-sm" style={{ color: meta.color, fontVariantNumeric: 'tabular-nums' }}>{fmt(subtotal)}</div>
+                <div className="text-sm" style={{ color: meta.color, fontVariantNumeric: 'tabular-nums' }}>{mFmt(hide, subtotal)}</div>
               </div>
               {g === 'offbalance' && <div className="text-xs mb-2" style={{ color: C.textFaint }}>{OFFBALANCE_NOTE}</div>}
               <div className="space-y-2 mt-2">
@@ -451,7 +510,7 @@ function Entry({ draft, setDraft, categories, previous, sorted, onSave, onStartD
                   <div key={c.id} className="flex items-center justify-between gap-3 py-1.5" style={{ borderBottom: `1px dashed ${C.borderSoft}` }}>
                     <span className="text-sm" style={{ color: C.textMuted }}>{c.label}</span>
                     <input type="number" value={draft.values[c.id] ?? ''} onChange={(e) => setVal(c.id, e.target.value)} placeholder="0"
-                      className="w-28 text-sm rounded-md px-2.5 py-1 text-right" style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.text, fontVariantNumeric: 'tabular-nums' }} />
+                      className="w-28 text-sm rounded-md px-2.5 py-1 text-right" style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.text, fontVariantNumeric: 'tabular-nums', filter: hide ? 'blur(5px)' : 'none' }} />
                   </div>
                 ))}
                 {cats.length === 0 && <div className="text-xs" style={{ color: C.textFaint }}>Nema stavki u ovoj grupi — dodaj ih u Kategorijama.</div>}
@@ -464,30 +523,34 @@ function Entry({ draft, setDraft, categories, previous, sorted, onSave, onStartD
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <Card style={{ padding: '16px 18px' }}>
           <div className="text-sm font-semibold mb-3" style={{ color: C.tealSoft }}>Prihodi</div>
-          <LineRow keyName="income" placeholder="npr. Plaća" draft={draft} setDraft={setDraft} />
+          <LineRow keyName="income" placeholder="npr. Plaća" draft={draft} setDraft={setDraft} hide={hide} />
         </Card>
         <Card style={{ padding: '16px 18px' }}>
           <div className="text-sm font-semibold mb-3" style={{ color: C.rust }}>Rashodi</div>
-          <LineRow keyName="expenses" placeholder="npr. Stanovanje" draft={draft} setDraft={setDraft} />
+          <LineRow keyName="expenses" placeholder="npr. Stanovanje" draft={draft} setDraft={setDraft} hide={hide} />
         </Card>
       </div>
 
       <Card style={{ padding: '16px 20px' }}>
         <div className="flex flex-wrap gap-6 text-sm">
-          <div><span style={{ color: C.textFaint }}>Likvidno neto: </span><span style={{ color: C.tealSoft, fontVariantNumeric: 'tabular-nums' }}>{fmt(t.netLiquid)}</span></div>
-          <div><span style={{ color: C.textFaint }}>Ukupno neto: </span><span style={{ color: C.goldSoft, fontVariantNumeric: 'tabular-nums' }}>{fmt(t.netTotal)}</span></div>
-          <div><span style={{ color: C.textFaint }}>Prihod − rashod: </span><span style={{ color: (t.income - t.expense) >= 0 ? C.tealSoft : C.rust, fontVariantNumeric: 'tabular-nums' }}>{fmtSigned(t.income - t.expense)}</span></div>
+          <div><span style={{ color: C.textFaint }}>Likvidno neto: </span><span style={{ color: C.tealSoft, fontVariantNumeric: 'tabular-nums' }}>{mFmt(hide, t.netLiquid)}</span></div>
+          <div><span style={{ color: C.textFaint }}>Ukupno neto: </span><span style={{ color: C.goldSoft, fontVariantNumeric: 'tabular-nums' }}>{mFmt(hide, t.netTotal)}</span></div>
+          <div><span style={{ color: C.textFaint }}>Prihod − rashod: </span><span style={{ color: (t.income - t.expense) >= 0 ? C.tealSoft : C.rust, fontVariantNumeric: 'tabular-nums' }}>{mFmtSigned(hide, t.income - t.expense)}</span></div>
         </div>
       </Card>
     </div>
   );
 }
 
-function HistoryTab({ sorted, categories, onEdit, onDelete }) {
+function HistoryTab({ sorted, categories, onEdit, onDelete, hide, onToggleHide }) {
   const rows = [...sorted].reverse();
   if (!rows.length) return <Card style={{ padding: 40, textAlign: 'center' }}><p style={{ color: C.textMuted }}>Još nema spremljenih mjeseci.</p></Card>;
   return (
-    <Card style={{ overflow: 'hidden' }}>
+    <div className="space-y-3">
+      <div className="flex justify-end">
+        <PrivacyButton on={hide} onToggle={onToggleHide} label="iznose na ovoj stranici" />
+      </div>
+      <Card style={{ overflow: 'hidden' }}>
       <div className="overflow-x-auto">
         <table className="w-full text-sm" style={{ borderCollapse: 'collapse' }}>
           <thead>
@@ -508,12 +571,12 @@ function HistoryTab({ sorted, categories, onEdit, onDelete }) {
               return (
                 <tr key={s.id} style={{ borderBottom: `1px solid ${C.borderSoft}` }}>
                   <td className="px-4 py-2.5" style={{ color: C.text }}>{monthLabelFull(s.month)}</td>
-                  <td className="px-4 py-2.5 text-right" style={{ color: C.tealSoft, fontVariantNumeric: 'tabular-nums' }}>{fmt(t.netLiquid)}</td>
-                  <td className="px-4 py-2.5 text-right" style={{ color: C.goldSoft, fontVariantNumeric: 'tabular-nums' }}>{fmt(t.netTotal)}</td>
-                  <td className="px-4 py-2.5 text-right" style={{ color: C.textMuted, fontVariantNumeric: 'tabular-nums' }}>{fmt(t.income)}</td>
-                  <td className="px-4 py-2.5 text-right" style={{ color: C.textMuted, fontVariantNumeric: 'tabular-nums' }}>{fmt(t.expense)}</td>
-                  <td className="px-4 py-2.5 text-right" style={{ color: (t.income - t.expense) >= 0 ? C.tealSoft : C.rust, fontVariantNumeric: 'tabular-nums' }}>{fmtSigned(t.income - t.expense)}</td>
-                  <td className="px-4 py-2.5 text-right" style={{ color: C.violet, fontVariantNumeric: 'tabular-nums' }}>{t.offbalance > 0 ? fmt(t.offbalance) : '—'}</td>
+                  <td className="px-4 py-2.5 text-right" style={{ color: C.tealSoft, fontVariantNumeric: 'tabular-nums' }}>{mFmt(hide, t.netLiquid)}</td>
+                  <td className="px-4 py-2.5 text-right" style={{ color: C.goldSoft, fontVariantNumeric: 'tabular-nums' }}>{mFmt(hide, t.netTotal)}</td>
+                  <td className="px-4 py-2.5 text-right" style={{ color: C.textMuted, fontVariantNumeric: 'tabular-nums' }}>{mFmt(hide, t.income)}</td>
+                  <td className="px-4 py-2.5 text-right" style={{ color: C.textMuted, fontVariantNumeric: 'tabular-nums' }}>{mFmt(hide, t.expense)}</td>
+                  <td className="px-4 py-2.5 text-right" style={{ color: (t.income - t.expense) >= 0 ? C.tealSoft : C.rust, fontVariantNumeric: 'tabular-nums' }}>{mFmtSigned(hide, t.income - t.expense)}</td>
+                  <td className="px-4 py-2.5 text-right" style={{ color: C.violet, fontVariantNumeric: 'tabular-nums' }}>{t.offbalance > 0 ? mFmt(hide, t.offbalance) : '—'}</td>
                   <td className="px-4 py-2.5 text-right whitespace-nowrap">
                     <button onClick={() => onEdit(s)} className="p-1.5 rounded" style={{ color: C.textMuted }}><PencilLine size={14} /></button>
                     <button onClick={() => onDelete(s.id, s.month)} className="p-1.5 rounded" style={{ color: C.textFaint }}><Trash2 size={14} /></button>
@@ -524,14 +587,19 @@ function HistoryTab({ sorted, categories, onEdit, onDelete }) {
           </tbody>
         </table>
       </div>
-    </Card>
+      </Card>
+    </div>
   );
 }
 
-function CategoriesTab({ categories, setCategories }) {
+function CategoriesTab({ categories, setCategories, hide, onToggleHide }) {
   const [newLabel, setNewLabel] = useState({});
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+    <div className="space-y-3">
+      <div className="flex justify-end">
+        <PrivacyButton on={hide} onToggle={onToggleHide} label="iznose na ovoj stranici" />
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
       {GROUP_ORDER.map((g) => {
         const meta = GROUP_META[g]; const Icon = meta.icon;
         const cats = categories.filter((c) => c.group === g);
@@ -563,11 +631,12 @@ function CategoriesTab({ categories, setCategories }) {
           </Card>
         );
       })}
+      </div>
     </div>
   );
 }
 
-function Diversification({ latest, sorted, categories }) {
+function Diversification({ latest, sorted, categories, hide, onToggleHide }) {
   if (!latest) {
     return (
       <Card style={{ padding: '48px 32px', textAlign: 'center' }}>
@@ -589,23 +658,28 @@ function Diversification({ latest, sorted, categories }) {
 
   return (
     <div className="space-y-6">
+      <div className="flex justify-end">
+        <PrivacyButton on={hide} onToggle={onToggleHide} label="iznose na ovoj stranici" />
+      </div>
       <Card style={{ padding: '20px 24px' }}>
         <div className="text-xs uppercase tracking-wide" style={{ color: C.textFaint, letterSpacing: '0.08em' }}>Bruto imovina · {monthLabelFull(latest.month)}</div>
-        <div style={{ fontFamily: 'Georgia, "Iowan Old Style", serif', fontSize: 34, color: C.text, fontVariantNumeric: 'tabular-nums', lineHeight: 1.2 }}>{fmt(total)}</div>
+        <div style={{ fontFamily: 'Georgia, "Iowan Old Style", serif', fontSize: 34, color: C.text, fontVariantNumeric: 'tabular-nums', lineHeight: 1.2 }}>{mFmt(hide, total)}</div>
         <div className="text-xs mt-1" style={{ color: C.textFaint }}>bez obaveza — svrha ovog prikaza je raspodjela po klasi imovine, ne neto vrijednost</div>
       </Card>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <Card style={{ padding: '20px' }}>
           <div className="text-sm font-semibold mb-3" style={{ color: C.text }}>Raspodjela portfelja</div>
-          <ResponsiveContainer width="100%" height={260}>
-            <PieChart>
-              <Pie data={pieData} dataKey="value" nameKey="label" innerRadius={60} outerRadius={95} paddingAngle={2}>
-                {pieData.map((e, i) => <Cell key={i} fill={e.color} stroke={C.panel} strokeWidth={2} />)}
-              </Pie>
-              <Tooltip contentStyle={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12 }} formatter={(v, n) => [fmt(v), n]} />
-            </PieChart>
-          </ResponsiveContainer>
+          <ChartMask on={hide}>
+            <ResponsiveContainer width="100%" height={260}>
+              <PieChart>
+                <Pie data={pieData} dataKey="value" nameKey="label" innerRadius={60} outerRadius={95} paddingAngle={2}>
+                  {pieData.map((e, i) => <Cell key={i} fill={e.color} stroke={C.panel} strokeWidth={2} />)}
+                </Pie>
+                <Tooltip contentStyle={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12 }} formatter={(v, n) => [mFmt(hide, v), n]} />
+              </PieChart>
+            </ResponsiveContainer>
+          </ChartMask>
         </Card>
 
         <Card style={{ padding: '20px' }}>
@@ -615,7 +689,7 @@ function Diversification({ latest, sorted, categories }) {
               <div key={b.id} className="flex items-center gap-3">
                 <span style={{ width: 10, height: 10, borderRadius: 999, background: b.color, flexShrink: 0 }} />
                 <span className="text-sm flex-1" style={{ color: C.textMuted }}>{b.label}</span>
-                <span className="text-sm" style={{ color: C.text, fontVariantNumeric: 'tabular-nums' }}>{fmt(b.value)}</span>
+                <span className="text-sm" style={{ color: C.text, fontVariantNumeric: 'tabular-nums' }}>{mFmt(hide, b.value)}</span>
                 <span className="text-xs w-12 text-right" style={{ color: C.textFaint, fontVariantNumeric: 'tabular-nums' }}>{total ? ((b.value / total) * 100).toFixed(1) : '0.0'}%</span>
               </div>
             ))}
@@ -627,17 +701,19 @@ function Diversification({ latest, sorted, categories }) {
       {sorted.length > 1 && (
         <Card style={{ padding: '20px 20px 8px' }}>
           <div className="text-sm font-semibold mb-3" style={{ color: C.text }}>Raspodjela kroz vrijeme</div>
-          <ResponsiveContainer width="100%" height={240}>
-            <BarChart data={trendData} margin={{ left: -10, right: 10 }}>
-              <CartesianGrid stroke={C.borderSoft} vertical={false} />
-              <XAxis dataKey="month" stroke={C.textFaint} tick={{ fontSize: 12 }} axisLine={{ stroke: C.border }} tickLine={false} />
-              <YAxis stroke={C.textFaint} tick={{ fontSize: 11 }} axisLine={false} tickLine={false} tickFormatter={(v) => `${Math.round(v / 1000)}k`} width={44} />
-              <Tooltip contentStyle={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12 }} formatter={(v, n) => [fmt(v), ASSET_CLASSES.find((a) => a.id === n)?.label || n]} />
-              {ASSET_CLASSES.map((ac) => (
-                <Bar key={ac.id} dataKey={ac.id} stackId="a" fill={ac.color} name={ac.id} />
-              ))}
-            </BarChart>
-          </ResponsiveContainer>
+          <ChartMask on={hide}>
+            <ResponsiveContainer width="100%" height={240}>
+              <BarChart data={trendData} margin={{ left: -10, right: 10 }}>
+                <CartesianGrid stroke={C.borderSoft} vertical={false} />
+                <XAxis dataKey="month" stroke={C.textFaint} tick={{ fontSize: 12 }} axisLine={{ stroke: C.border }} tickLine={false} />
+                <YAxis stroke={C.textFaint} tick={{ fontSize: 11 }} axisLine={false} tickLine={false} tickFormatter={(v) => `${Math.round(v / 1000)}k`} width={44} />
+                <Tooltip contentStyle={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12 }} formatter={(v, n) => [mFmt(hide, v), ASSET_CLASSES.find((a) => a.id === n)?.label || n]} />
+                {ASSET_CLASSES.map((ac) => (
+                  <Bar key={ac.id} dataKey={ac.id} stackId="a" fill={ac.color} name={ac.id} />
+                ))}
+              </BarChart>
+            </ResponsiveContainer>
+          </ChartMask>
         </Card>
       )}
 
@@ -648,7 +724,7 @@ function Diversification({ latest, sorted, categories }) {
   );
 }
 
-function WealthType({ latest, sorted, categories, consumptionAssets }) {
+function WealthType({ latest, sorted, categories, consumptionAssets, hide, onToggleHide }) {
   if (!latest) {
     return (
       <Card style={{ padding: '48px 32px', textAlign: 'center' }}>
@@ -677,9 +753,12 @@ function WealthType({ latest, sorted, categories, consumptionAssets }) {
 
   return (
     <div className="space-y-6">
+      <div className="flex justify-end">
+        <PrivacyButton on={hide} onToggle={onToggleHide} label="iznose na ovoj stranici" />
+      </div>
       <Card style={{ padding: '20px 24px' }}>
         <div className="text-xs uppercase tracking-wide" style={{ color: C.textFaint, letterSpacing: '0.08em' }}>Bruto imovina po vrsti · {monthLabelFull(latest.month)}</div>
-        <div style={{ fontFamily: 'Georgia, "Iowan Old Style", serif', fontSize: 34, color: C.text, fontVariantNumeric: 'tabular-nums', lineHeight: 1.2 }}>{fmt(total)}</div>
+        <div style={{ fontFamily: 'Georgia, "Iowan Old Style", serif', fontSize: 34, color: C.text, fontVariantNumeric: 'tabular-nums', lineHeight: 1.2 }}>{mFmt(hide, total)}</div>
         <div className="text-xs mt-1" style={{ color: C.textFaint }}>bez obaveza — Novac / Proizvodna imovina / Potrošna imovina</div>
       </Card>
 
@@ -687,7 +766,7 @@ function WealthType({ latest, sorted, categories, consumptionAssets }) {
         {breakdown.map((b) => (
           <Card key={b.id} style={{ padding: '16px 18px', borderLeft: `3px solid ${b.color}` }}>
             <div className="text-xs" style={{ color: C.textFaint }}>{b.label}</div>
-            <div style={{ color: C.text, fontSize: 22, fontVariantNumeric: 'tabular-nums', marginTop: 2 }}>{fmt(b.value)}</div>
+            <div style={{ color: C.text, fontSize: 22, fontVariantNumeric: 'tabular-nums', marginTop: 2 }}>{mFmt(hide, b.value)}</div>
             <div className="text-xs mt-1" style={{ color: C.textFaint }}>{total ? ((b.value / total) * 100).toFixed(1) : '0.0'}% ukupne bruto imovine</div>
           </Card>
         ))}
@@ -725,14 +804,16 @@ function WealthType({ latest, sorted, categories, consumptionAssets }) {
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <Card style={{ padding: '20px' }}>
           <div className="text-sm font-semibold mb-3" style={{ color: C.text }}>Raspodjela</div>
-          <ResponsiveContainer width="100%" height={240}>
-            <PieChart>
-              <Pie data={breakdown.filter((b) => b.value > 0)} dataKey="value" nameKey="label" innerRadius={60} outerRadius={95} paddingAngle={2}>
-                {breakdown.filter((b) => b.value > 0).map((e, i) => <Cell key={i} fill={e.color} stroke={C.panel} strokeWidth={2} />)}
-              </Pie>
-              <Tooltip contentStyle={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12 }} formatter={(v, n) => [fmt(v), n]} />
-            </PieChart>
-          </ResponsiveContainer>
+          <ChartMask on={hide}>
+            <ResponsiveContainer width="100%" height={240}>
+              <PieChart>
+                <Pie data={breakdown.filter((b) => b.value > 0)} dataKey="value" nameKey="label" innerRadius={60} outerRadius={95} paddingAngle={2}>
+                  {breakdown.filter((b) => b.value > 0).map((e, i) => <Cell key={i} fill={e.color} stroke={C.panel} strokeWidth={2} />)}
+                </Pie>
+                <Tooltip contentStyle={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12 }} formatter={(v, n) => [mFmt(hide, v), n]} />
+              </PieChart>
+            </ResponsiveContainer>
+          </ChartMask>
         </Card>
 
         <Card style={{ padding: '20px' }}>
@@ -751,13 +832,13 @@ function WealthType({ latest, sorted, categories, consumptionAssets }) {
                   {cats.map((c) => (
                     <div key={c.id} className="flex items-center justify-between text-sm py-0.5">
                       <span style={{ color: C.textMuted }}>{c.label}</span>
-                      <span style={{ color: C.text, fontVariantNumeric: 'tabular-nums' }}>{fmt(Number(latest.values[c.id]))}</span>
+                      <span style={{ color: C.text, fontVariantNumeric: 'tabular-nums' }}>{mFmt(hide, Number(latest.values[c.id]))}</span>
                     </div>
                   ))}
                   {assets.map((a) => (
                     <div key={a.id} className="flex items-center justify-between text-sm py-0.5">
                       <span style={{ color: C.textMuted }}>{a.label}</span>
-                      <span style={{ color: C.text, fontVariantNumeric: 'tabular-nums' }}>{fmt(computeConsumptionValue(a).currentValue)}</span>
+                      <span style={{ color: C.text, fontVariantNumeric: 'tabular-nums' }}>{mFmt(hide, computeConsumptionValue(a).currentValue)}</span>
                     </div>
                   ))}
                 </div>
@@ -770,17 +851,19 @@ function WealthType({ latest, sorted, categories, consumptionAssets }) {
       {trendData.length > 1 && (
         <Card style={{ padding: '20px 20px 8px' }}>
           <div className="text-sm font-semibold mb-3" style={{ color: C.text }}>Raspodjela kroz vrijeme</div>
-          <ResponsiveContainer width="100%" height={240}>
-            <BarChart data={trendData} margin={{ left: -10, right: 10 }}>
-              <CartesianGrid stroke={C.borderSoft} vertical={false} />
-              <XAxis dataKey="month" stroke={C.textFaint} tick={{ fontSize: 12 }} axisLine={{ stroke: C.border }} tickLine={false} />
-              <YAxis stroke={C.textFaint} tick={{ fontSize: 11 }} axisLine={false} tickLine={false} tickFormatter={(v) => `${Math.round(v / 1000)}k`} width={44} />
-              <Tooltip contentStyle={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12 }} formatter={(v, n) => [fmt(v), WEALTH_TYPES.find((w) => w.id === n)?.label || n]} />
-              {WEALTH_TYPES.map((wt) => (
-                <Bar key={wt.id} dataKey={wt.id} stackId="a" fill={wt.color} name={wt.id} />
-              ))}
-            </BarChart>
-          </ResponsiveContainer>
+          <ChartMask on={hide}>
+            <ResponsiveContainer width="100%" height={240}>
+              <BarChart data={trendData} margin={{ left: -10, right: 10 }}>
+                <CartesianGrid stroke={C.borderSoft} vertical={false} />
+                <XAxis dataKey="month" stroke={C.textFaint} tick={{ fontSize: 12 }} axisLine={{ stroke: C.border }} tickLine={false} />
+                <YAxis stroke={C.textFaint} tick={{ fontSize: 11 }} axisLine={false} tickLine={false} tickFormatter={(v) => `${Math.round(v / 1000)}k`} width={44} />
+                <Tooltip contentStyle={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12 }} formatter={(v, n) => [mFmt(hide, v), WEALTH_TYPES.find((w) => w.id === n)?.label || n]} />
+                {WEALTH_TYPES.map((wt) => (
+                  <Bar key={wt.id} dataKey={wt.id} stackId="a" fill={wt.color} name={wt.id} />
+                ))}
+              </BarChart>
+            </ResponsiveContainer>
+          </ChartMask>
         </Card>
       )}
 
@@ -791,7 +874,7 @@ function WealthType({ latest, sorted, categories, consumptionAssets }) {
   );
 }
 
-function ConsumptionAssetForm({ initial, onSave, onCancel }) {
+function ConsumptionAssetForm({ initial, onSave, onCancel, hide }) {
   const [type, setType] = useState(initial?.type || 'auto');
   const [label, setLabel] = useState(initial?.label || '');
   const [purchaseValue, setPurchaseValue] = useState(initial?.purchaseValue ?? '');
@@ -827,7 +910,7 @@ function ConsumptionAssetForm({ initial, onSave, onCancel }) {
         <div>
           <div className="text-xs mb-1" style={{ color: C.textFaint }}>Nabavna vrijednost (€)</div>
           <input type="number" value={purchaseValue} onChange={(e) => setPurchaseValue(e.target.value)} placeholder="0"
-            className="w-full text-sm rounded-md px-2.5 py-1.5" style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.text }} />
+            className="w-full text-sm rounded-md px-2.5 py-1.5" style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.text, filter: hide ? 'blur(5px)' : 'none' }} />
         </div>
         <div>
           <div className="text-xs mb-1" style={{ color: C.textFaint }}>Datum nabave</div>
@@ -867,7 +950,7 @@ function ConsumptionAssetForm({ initial, onSave, onCancel }) {
   );
 }
 
-function ConsumptionAssetCard({ asset, onEdit, onDelete, onUpdateValuation }) {
+function ConsumptionAssetCard({ asset, onEdit, onDelete, onUpdateValuation, hide }) {
   const [revaluing, setRevaluing] = useState(false);
   const [newValue, setNewValue] = useState('');
   const t = findConsumptionType(asset.type);
@@ -882,15 +965,15 @@ function ConsumptionAssetCard({ asset, onEdit, onDelete, onUpdateValuation }) {
         <div>
           <div className="text-sm font-semibold" style={{ color: C.text }}>{asset.label}</div>
           <div className="text-xs mt-0.5" style={{ color: C.textFaint }}>
-            {t.label} · nabavljeno {monthLabel(asset.purchaseDate)} za {fmt(asset.purchaseValue)}
-            {hasOverride && <> · zadnja procjena {monthLabel(asset.overrideDate)}: {fmt(asset.valueOverride)}</>}
+            {t.label} · nabavljeno {monthLabel(asset.purchaseDate)} za {mFmt(hide, asset.purchaseValue)}
+            {hasOverride && <> · zadnja procjena {monthLabel(asset.overrideDate)}: {mFmt(hide, asset.valueOverride)}</>}
           </div>
           {asset.notes && <div className="text-xs mt-0.5" style={{ color: C.textFaint }}>{asset.notes}</div>}
         </div>
         <div className="text-right">
-          <div style={{ color: C.text, fontSize: 18, fontVariantNumeric: 'tabular-nums' }}>{fmt(currentValue)}</div>
+          <div style={{ color: C.text, fontSize: 18, fontVariantNumeric: 'tabular-nums' }}>{mFmt(hide, currentValue)}</div>
           <div className="text-xs" style={{ color: changeFromPurchase < 0 ? C.rust : C.tealSoft, fontVariantNumeric: 'tabular-nums' }}>
-            {fmtSigned(changeFromPurchase)} od nabave
+            {mFmtSigned(hide, changeFromPurchase)} od nabave
           </div>
         </div>
       </div>
@@ -908,7 +991,7 @@ function ConsumptionAssetCard({ asset, onEdit, onDelete, onUpdateValuation }) {
       {revaluing ? (
         <div className="flex items-center gap-2 mt-3">
           <input type="number" autoFocus value={newValue} onChange={(e) => setNewValue(e.target.value)} placeholder="Nova procijenjena vrijednost (€)"
-            className="flex-1 text-sm rounded-md px-2.5 py-1.5" style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.text }} />
+            className="flex-1 text-sm rounded-md px-2.5 py-1.5" style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.text, filter: hide ? 'blur(5px)' : 'none' }} />
           <button
             disabled={newValue === '' || Number.isNaN(Number(newValue))}
             onClick={() => { onUpdateValuation(asset.id, Number(newValue)); setRevaluing(false); setNewValue(''); }}
@@ -927,7 +1010,7 @@ function ConsumptionAssetCard({ asset, onEdit, onDelete, onUpdateValuation }) {
   );
 }
 
-function ConsumptionAssets({ consumptionAssets, setConsumptionAssets }) {
+function ConsumptionAssets({ consumptionAssets, setConsumptionAssets, hide, onToggleHide }) {
   const [adding, setAdding] = useState(false);
   const [editingId, setEditingId] = useState(null);
 
@@ -963,9 +1046,12 @@ function ConsumptionAssets({ consumptionAssets, setConsumptionAssets }) {
 
   return (
     <div className="space-y-4">
+      <div className="flex justify-end">
+        <PrivacyButton on={hide} onToggle={onToggleHide} label="iznose na ovoj stranici" />
+      </div>
       <Card style={{ padding: '20px 24px' }}>
         <div className="text-xs uppercase tracking-wide" style={{ color: C.textFaint, letterSpacing: '0.08em' }}>Potrošna imovina · procijenjena trenutna vrijednost</div>
-        <div style={{ fontFamily: 'Georgia, "Iowan Old Style", serif', fontSize: 34, color: C.text, fontVariantNumeric: 'tabular-nums', lineHeight: 1.2 }}>{fmt(total)}</div>
+        <div style={{ fontFamily: 'Georgia, "Iowan Old Style", serif', fontSize: 34, color: C.text, fontVariantNumeric: 'tabular-nums', lineHeight: 1.2 }}>{mFmt(hide, total)}</div>
         <div className="text-xs mt-1" style={{ color: C.textFaint }}>
           Imovina koja se troši osobnom uporabom ili gubi vrijednost s vremenom — nije dio Neto vrijednosti (Pregled), prati se ovdje odvojeno.
           {staleCount > 0 && <span style={{ color: C.rust }}> {staleCount} {staleCount === 1 ? 'stavka čeka' : 'stavke čekaju'} reviziju procjene.</span>}
@@ -978,12 +1064,12 @@ function ConsumptionAssets({ consumptionAssets, setConsumptionAssets }) {
         </button>
       )}
 
-      {adding && <ConsumptionAssetForm onSave={handleSave} onCancel={() => setAdding(false)} />}
-      {editingAsset && <ConsumptionAssetForm initial={editingAsset} onSave={handleSave} onCancel={() => setEditingId(null)} />}
+      {adding && <ConsumptionAssetForm onSave={handleSave} onCancel={() => setAdding(false)} hide={hide} />}
+      {editingAsset && <ConsumptionAssetForm initial={editingAsset} onSave={handleSave} onCancel={() => setEditingId(null)} hide={hide} />}
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         {consumptionAssets.map((a) => (
-          <ConsumptionAssetCard key={a.id} asset={a} onEdit={(x) => setEditingId(x.id)} onDelete={handleDelete} onUpdateValuation={handleUpdateValuation} />
+          <ConsumptionAssetCard key={a.id} asset={a} onEdit={(x) => setEditingId(x.id)} onDelete={handleDelete} onUpdateValuation={handleUpdateValuation} hide={hide} />
         ))}
       </div>
 
@@ -1052,6 +1138,25 @@ export default function App() {
   const [draft, setDraft] = useState(null);
   const [notice, setNotice] = useState('');
   const [monthPickerOpen, setMonthPickerOpen] = useState(false);
+
+  // Privatnost: svaka stranica ima svoj gumb za skrivanje iznosa (pagePrivacy[tab]).
+  // Glavni gumb u headeru je "master" - nema svoj poseban state, nego je IZVEDEN
+  // (allPrivacyOn = jesu li baš sve stranice trenutno skrivene). Zato:
+  // - klik na master kad NIJE sve skriveno -> postavi SVE stranice na skriveno
+  //   (svi ostali gumbi automatski postanu "pritisnuti")
+  // - klik na master kad JEST sve skriveno -> otkrij sve stranice
+  // - ako korisnik na pojedinoj stranici otkrije iznose, allPrivacyOn sam padne
+  //   na false pa se master gumb automatski "oslobodi" (nije potreban extra kod)
+  const [pagePrivacy, setPagePrivacy] = useState({
+    pregled: false, unos: false, povijest: false, kategorije: false,
+    diverzifikacija: false, vrstaImovine: false, potrosnaImovina: false,
+  });
+  const allPrivacyOn = Object.values(pagePrivacy).every(Boolean);
+  const toggleAllPrivacy = () => {
+    const next = !allPrivacyOn;
+    setPagePrivacy((prev) => Object.fromEntries(Object.keys(prev).map((k) => [k, next])));
+  };
+  const togglePagePrivacy = (id) => setPagePrivacy((prev) => ({ ...prev, [id]: !prev[id] }));
 
   useEffect(() => {
     let cancelled = false;
@@ -1181,9 +1286,12 @@ export default function App() {
       )}
       <div style={{ maxWidth: 1040, margin: '0 auto', padding: '28px 20px 64px' }}>
         <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
-          <div>
-            <div style={{ fontFamily: 'Georgia, "Iowan Old Style", serif', fontSize: 24, letterSpacing: '0.01em' }}>Moj Kompić</div>
-            <div className="text-xs" style={{ color: C.textFaint }}>Osobna knjiga imovine, mjesec po mjesec</div>
+          <div className="flex items-center gap-3">
+            <div>
+              <div style={{ fontFamily: 'Georgia, "Iowan Old Style", serif', fontSize: 24, letterSpacing: '0.01em' }}>Moj Kompić</div>
+              <div className="text-xs" style={{ color: C.textFaint }}>Osobna knjiga imovine, mjesec po mjesec</div>
+            </div>
+            <PrivacyButton on={allPrivacyOn} onToggle={toggleAllPrivacy} label="sve iznose u aplikaciji" size="md" />
           </div>
           <div className="flex items-center gap-1 p-1 rounded-lg" style={{ background: C.surface, border: `1px solid ${C.border}` }}>
             <TabButton id="pregled" label="Pregled" icon={LayoutGrid} activeTab={tab} onSelect={setTab} />
@@ -1212,6 +1320,7 @@ export default function App() {
             momChange={momChange} momPct={momPct}
             chartData={chartData} liquidPie={liquidPie} totalPie={totalPie}
             onStartDraft={startDraft}
+            hide={pagePrivacy.pregled} onToggleHide={() => togglePagePrivacy('pregled')}
           />
         )}
         {tab === 'unos' && (
@@ -1219,22 +1328,38 @@ export default function App() {
             draft={draft} setDraft={setDraft} categories={categories}
             previous={previous} sorted={sorted}
             onSave={saveDraft} onStartDraft={startDraft}
+            hide={pagePrivacy.unos} onToggleHide={() => togglePagePrivacy('unos')}
           />
         )}
         {tab === 'povijest' && (
-          <HistoryTab sorted={sorted} categories={categories} onEdit={editSnapshot} onDelete={deleteSnapshot} />
+          <HistoryTab
+            sorted={sorted} categories={categories} onEdit={editSnapshot} onDelete={deleteSnapshot}
+            hide={pagePrivacy.povijest} onToggleHide={() => togglePagePrivacy('povijest')}
+          />
         )}
         {tab === 'kategorije' && (
-          <CategoriesTab categories={categories} setCategories={setCategories} />
+          <CategoriesTab
+            categories={categories} setCategories={setCategories}
+            hide={pagePrivacy.kategorije} onToggleHide={() => togglePagePrivacy('kategorije')}
+          />
         )}
         {tab === 'diverzifikacija' && (
-          <Diversification latest={latest} sorted={sorted} categories={categories} />
+          <Diversification
+            latest={latest} sorted={sorted} categories={categories}
+            hide={pagePrivacy.diverzifikacija} onToggleHide={() => togglePagePrivacy('diverzifikacija')}
+          />
         )}
         {tab === 'vrstaImovine' && (
-          <WealthType latest={latest} sorted={sorted} categories={categories} consumptionAssets={consumptionAssets} />
+          <WealthType
+            latest={latest} sorted={sorted} categories={categories} consumptionAssets={consumptionAssets}
+            hide={pagePrivacy.vrstaImovine} onToggleHide={() => togglePagePrivacy('vrstaImovine')}
+          />
         )}
         {tab === 'potrosnaImovina' && (
-          <ConsumptionAssets consumptionAssets={consumptionAssets} setConsumptionAssets={setConsumptionAssets} />
+          <ConsumptionAssets
+            consumptionAssets={consumptionAssets} setConsumptionAssets={setConsumptionAssets}
+            hide={pagePrivacy.potrosnaImovina} onToggleHide={() => togglePagePrivacy('potrosnaImovina')}
+          />
         )}
       </div>
     </div>
