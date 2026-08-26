@@ -1,0 +1,35 @@
+name: Deploy na mordor
+
+# NAMJERNO nema "on: push" - ovo se pokreće SAMO ručno, klikom na
+# "Run workflow" u Actions tabu. To je naš besplatni ekvivalent
+# "Required reviewers" gatea: ništa se ne deploya bez namjernog,
+# svjesnog klika.
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Git SHA za deploy (prazno = najnoviji 'main' build)"
+        required: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production   # nužno - ovdje su secreti spremljeni
+    steps:
+      - name: Deploy preko SSH-a na mordor
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.MORDOR_HOST }}
+          username: ${{ secrets.MORDOR_USER }}
+          key: ${{ secrets.MORDOR_SSH_KEY }}
+          script: |
+            set -e
+            cd ~/apps/moj-kompic
+            export IMAGE_TAG="${{ github.event.inputs.image_tag }}"
+            if [ -z "$IMAGE_TAG" ]; then
+              IMAGE_TAG=main
+            fi
+            echo "Deploying image tag: $IMAGE_TAG"
+            IMAGE_TAG=$IMAGE_TAG docker compose -f docker-compose.prod.yml pull
+            IMAGE_TAG=$IMAGE_TAG docker compose -f docker-compose.prod.yml up -d
+            docker compose -f docker-compose.prod.yml ps
