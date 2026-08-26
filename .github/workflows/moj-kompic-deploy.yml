@@ -27,7 +27,7 @@ jobs:
             cd ~/apps/moj-kompic
             export IMAGE_TAG="${{ github.event.inputs.image_tag }}"
             if [ -z "$IMAGE_TAG" ]; then
-              IMAGE_TAG=main
+              IMAGE_TAG=latest
             fi
             echo "Deploying image tag: $IMAGE_TAG"
             IMAGE_TAG=$IMAGE_TAG docker compose -f docker-compose.prod.yml pull
