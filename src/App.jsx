@@ -7,7 +7,7 @@ import {
   Plus, Trash2, TrendingUp, TrendingDown, Wallet, PiggyBank, Home,
   CreditCard, Copy, LayoutGrid, PencilLine, History as HistoryIcon,
   Settings2, Save, ArrowRight, Landmark, PieChart as PieChartIcon, Layers, Car,
-  Eye, EyeOff
+  Eye, EyeOff, Coins, RefreshCw, AlertTriangle, Briefcase, RotateCcw, ChevronDown, ChevronUp
 } from 'lucide-react';
 
 /* ---------- design tokens ---------- */
@@ -129,6 +129,110 @@ const CONSUMPTION_TYPES = [
   { id: 'ostalo', label: 'Ostalo', defaultDepreciationRate: 10, warningMonths: null },
 ];
 const findConsumptionType = (id) => CONSUMPTION_TYPES.find((t) => t.id === id) || CONSUMPTION_TYPES[CONSUMPTION_TYPES.length - 1];
+
+// Fizičko zlato/srebro (poluge, kovanice) - posebna stranica "Plemeniti metali".
+// Za razliku od kategorija Zlato/Srebro u Unosu (gdje se svaki mjesec ručno
+// upisuje jedan zbroj u eurima), ovdje se unose fizičke jedinice (težina,
+// čistoća, količina), a trenutna protuvrijednost se računa automatski prema
+// TRENUTNOJ tržišnoj (spot) cijeni zlata/srebra - vidi /api/metal-prices.
+const METAL_ITEM_TYPES = [
+  { id: 'zlatnik', label: 'Zlatnik', metal: 'gold' },
+  { id: 'zlatnaPoluga', label: 'Zlatna poluga', metal: 'gold' },
+  { id: 'srebrnjak', label: 'Srebrnjak', metal: 'silver' },
+  { id: 'srebrnaPoluga', label: 'Srebrna poluga', metal: 'silver' },
+];
+const findMetalItemType = (id) => METAL_ITEM_TYPES.find((t) => t.id === id) || METAL_ITEM_TYPES[0];
+
+const METAL_META = {
+  gold: { label: 'Zlato', color: C.gold, symbol: 'Au' },
+  silver: { label: 'Srebro', color: '#b8bec7', symbol: 'Ag' },
+};
+
+// Uobičajene finoće (‰ = tisućinke) - samo prijedlozi za brži unos, polje
+// ostaje slobodno uredivo za bilo koju drugu vrijednost (npr. stare kovanice).
+const PURITY_PRESETS = {
+  gold: [
+    { label: '999,9‰ (24K / .9999)', value: 999.9 },
+    { label: '999‰ (.999)', value: 999 },
+    { label: '916,7‰ (22K)', value: 916.7 },
+    { label: '900‰ (.900)', value: 900 },
+    { label: '750‰ (18K)', value: 750 },
+    { label: '585‰ (14K)', value: 585 },
+  ],
+  silver: [
+    { label: '999‰ (fine silver / .999)', value: 999 },
+    { label: '958‰ (Britannia)', value: 958 },
+    { label: '925‰ (sterling)', value: 925 },
+    { label: '900‰ (.900)', value: 900 },
+    { label: '835‰ (.835)', value: 835 },
+  ],
+};
+
+// Vrijednost stavke = težina (g) x čistoća (udio čistog metala) x količina x cijena čistog metala po gramu.
+const computeMetalItemValue = (item, prices) => {
+  const metal = findMetalItemType(item.type).metal;
+  const pricePerGram = Number(prices?.[metal]?.eurPerGram) || 0;
+  const fineGrams = Number(item.weightGrams || 0) * (Number(item.purityPermille || 0) / 1000) * Number(item.quantity || 0);
+  return fineGrams * pricePerGram;
+};
+
+const computeMetalTotals = (metalItems, prices) => {
+  const totals = { gold: 0, silver: 0 };
+  (metalItems || []).forEach((m) => {
+    const metal = findMetalItemType(m.type).metal;
+    totals[metal] += computeMetalItemValue(m, prices);
+  });
+  return { ...totals, total: totals.gold + totals.silver };
+};
+
+// Ulaganja (ekvivalent Notion "Investment Journal" predloška): opći dnevnik
+// pojedinačnih ulaganja (dionice, ETF-ovi, kriptovalute, zlato/srebro kao
+// financijska pozicija, nekretnine i sl.) s praćenjem uloženog iznosa,
+// trenutne/prodajne vrijednosti i prinosa. Za razliku od "Plemenitih metala"
+// (koji računa vrijednost iz težine/čistoće i UŽIVO tržišne cijene), ovdje se
+// trenutna/prodajna cijena po jedinici unosi ručno - isto kao u Notion
+// predlošku (Current Price se tamo također ažurira ručno, bez live feeda).
+const INVESTMENT_TYPES = [
+  'Dionica', 'ETF', 'Uzajamni fond', 'Indeksni fond', 'Obveznica',
+  'Oročeni depozit', 'Kriptovaluta', 'Zlato', 'Srebro', 'Nekretnina', 'Gotovina', 'Roba/ostalo',
+];
+
+// Boja po vrsti ulaganja - grupiramo karticama po ovome u tabu Ulaganja.
+// Gdje isti asset postoji i drugdje u appu (Kriptovaluta/Zlato/Srebro/Nekretnina
+// se poklapaju s Diverzifikacijom i Plemenitim metalima), namjerno koristimo
+// istu boju radi vizualne dosljednosti kroz cijelu aplikaciju.
+const INVESTMENT_TYPE_COLOR = {
+  'Dionica': C.blue,
+  'ETF': C.teal,
+  'Uzajamni fond': C.tealSoft,
+  'Indeksni fond': '#7ec0bb',
+  'Obveznica': C.violet,
+  'Oročeni depozit': '#8fb8a8',
+  'Kriptovaluta': '#e8934a',
+  'Zlato': C.gold,
+  'Srebro': '#b8bec7',
+  'Nekretnina': '#a97155',
+  'Gotovina': '#c9c2a8',
+  'Roba/ostalo': C.textFaint,
+};
+
+// Ulaganje je "prodano" (spada u Prošla ulaganja) čim ima postavljen datum prodaje.
+const isInvestmentSold = (inv) => !!inv.sellDate;
+
+const computeInvestmentMetrics = (inv, asOf = new Date()) => {
+  const buyPrice = Number(inv.buyPrice) || 0;
+  const quantity = Number(inv.quantity) || 0;
+  const moneyInvested = buyPrice * quantity;
+  const sold = isInvestmentSold(inv);
+  const exitPrice = sold
+    ? Number(inv.sellPrice) || 0
+    : (inv.currentPrice === null || inv.currentPrice === undefined || inv.currentPrice === '' ? buyPrice : Number(inv.currentPrice));
+  const currentValue = exitPrice * quantity;
+  const returns = currentValue - moneyInvested;
+  const returnsPct = moneyInvested ? (returns / moneyInvested) * 100 : 0;
+  const months = Math.max(0, monthsBetween(inv.buyDate, sold ? new Date(`${inv.sellDate}-01`) : asOf));
+  return { moneyInvested, currentValue, returns, returnsPct, sold, months };
+};
 
 const monthsBetween = (fromYYYYMM, toDate) => {
   if (!fromYYYYMM) return 0;
@@ -1082,6 +1186,611 @@ function ConsumptionAssets({ consumptionAssets, setConsumptionAssets, hide, onTo
   );
 }
 
+// Dohvaća trenutnu spot cijenu zlata/srebra s backenda (/api/metal-prices).
+// Backend kešira izvore ~10 min; ovaj hook samo pamti zadnji uspješan odgovor
+// u UI-ju tako da kratkotrajni pad mreže na home serveru ne obriše prikaz.
+function useMetalPrices() {
+  const [prices, setPrices] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  const refresh = async () => {
+    setLoading(true);
+    try {
+      const res = await fetch('/api/metal-prices');
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Dohvat cijene nije uspio.');
+      setPrices(data);
+      setError('');
+    } catch (e) {
+      setError(e.message || 'Dohvat cijene nije uspio.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { refresh(); }, []);
+  return { prices, loading, error, refresh };
+}
+
+function MetalPricePanel({ prices, loading, error, onRefresh, overrides, setOverrides }) {
+  const goldLive = prices?.gold?.eurPerGram ?? null;
+  const silverLive = prices?.silver?.eurPerGram ?? null;
+  const goldOverride = overrides?.goldEurPerGram;
+  const silverOverride = overrides?.silverEurPerGram;
+  const hasGoldOverride = goldOverride !== undefined && goldOverride !== null && goldOverride !== '';
+  const hasSilverOverride = silverOverride !== undefined && silverOverride !== null && silverOverride !== '';
+
+  const updatedLabel = prices?.fetchedAt
+    ? new Date(prices.fetchedAt).toLocaleString('hr-HR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+    : null;
+
+  return (
+    <Card style={{ padding: '18px 20px' }}>
+      <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+        <div className="text-sm font-semibold" style={{ color: C.text }}>Trenutna spot cijena</div>
+        <button onClick={onRefresh} disabled={loading} className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-md" style={{ color: C.textMuted, border: `1px solid ${C.border}` }}>
+          <RefreshCw size={12} className={loading ? 'animate-spin' : ''} /> {loading ? 'Dohvaćam…' : 'Osvježi'}
+        </button>
+      </div>
+
+      {error && !prices && (
+        <div className="flex items-start gap-2 text-xs px-3 py-2.5 rounded-md mb-3" style={{ background: 'rgba(193,106,72,0.12)', color: C.rust, border: `1px solid ${C.rust}55` }}>
+          <AlertTriangle size={14} style={{ flexShrink: 0, marginTop: 1 }} />
+          <span>{error} Dok se ne riješi, unesi cijene ručno ispod — koristit će se za izračun sve dok ih ne isprazniš.</span>
+        </div>
+      )}
+      {prices?.stale && (
+        <div className="flex items-start gap-2 text-xs px-3 py-2.5 rounded-md mb-3" style={{ background: 'rgba(193,106,72,0.12)', color: C.rust, border: `1px solid ${C.rust}55` }}>
+          <AlertTriangle size={14} style={{ flexShrink: 0, marginTop: 1 }} />
+          <span>Dohvat trenutno ne uspijeva — prikazana je zadnja poznata cijena, nije nužno aktualna.</span>
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {[
+          { metal: 'gold', live: goldLive, override: goldOverride, hasOverride: hasGoldOverride, setOverride: (v) => setOverrides({ ...overrides, goldEurPerGram: v }) },
+          { metal: 'silver', live: silverLive, override: silverOverride, hasOverride: hasSilverOverride, setOverride: (v) => setOverrides({ ...overrides, silverEurPerGram: v }) },
+        ].map(({ metal, live, override, hasOverride, setOverride }) => {
+          const meta = METAL_META[metal];
+          const effective = hasOverride ? Number(override) : live;
+          return (
+            <div key={metal} className="rounded-md p-3" style={{ border: `1px solid ${C.border}`, background: C.surface }}>
+              <div className="flex items-center justify-between mb-1.5">
+                <div className="flex items-center gap-1.5 text-xs font-semibold" style={{ color: meta.color }}>
+                  <span style={{ width: 8, height: 8, borderRadius: 999, background: meta.color, display: 'inline-block' }} />
+                  {meta.label} ({meta.symbol})
+                </div>
+                {hasOverride && <span className="text-xs" style={{ color: C.textFaint }}>ručno postavljeno</span>}
+              </div>
+              <div style={{ color: C.text, fontSize: 20, fontVariantNumeric: 'tabular-nums' }}>
+                {effective ? `${effective.toFixed(2)} € / g` : '—'}
+              </div>
+              {!hasOverride && live && updatedLabel && (
+                <div className="text-xs mt-0.5" style={{ color: C.textFaint }}>fine cijena · ažurirano {updatedLabel}</div>
+              )}
+              <div className="flex items-center gap-2 mt-2">
+                <input
+                  type="number" step="0.01" value={override ?? ''} onChange={(e) => setOverride(e.target.value)}
+                  placeholder={live ? `ručno (€/g), inače ${live.toFixed(2)}` : 'ručno unesi €/g'}
+                  className="flex-1 text-xs rounded-md px-2 py-1.5" style={{ background: C.panel, border: `1px solid ${C.border}`, color: C.text }}
+                />
+                {hasOverride && (
+                  <button onClick={() => setOverride('')} className="text-xs" style={{ color: C.textFaint }}>Poništi</button>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </Card>
+  );
+}
+
+function MetalItemForm({ initial, onSave, onCancel, hide }) {
+  const [type, setType] = useState(initial?.type || 'zlatnik');
+  const [label, setLabel] = useState(initial?.label || '');
+  const [weightGrams, setWeightGrams] = useState(initial?.weightGrams ?? '');
+  const [purityPermille, setPurityPermille] = useState(initial?.purityPermille ?? 999.9);
+  const [quantity, setQuantity] = useState(initial?.quantity ?? 1);
+  const [purchasePrice, setPurchasePrice] = useState(initial?.purchasePrice ?? '');
+  const [purchaseDate, setPurchaseDate] = useState(initial?.purchaseDate || '');
+  const [notes, setNotes] = useState(initial?.notes || '');
+
+  const metal = findMetalItemType(type).metal;
+  const presets = PURITY_PRESETS[metal];
+
+  const canSave = label.trim() && weightGrams !== '' && !Number.isNaN(Number(weightGrams)) && Number(weightGrams) > 0
+    && purityPermille !== '' && !Number.isNaN(Number(purityPermille))
+    && quantity !== '' && !Number.isNaN(Number(quantity)) && Number(quantity) > 0;
+
+  return (
+    <Card style={{ padding: '18px 20px' }}>
+      <div className="text-sm font-semibold mb-3" style={{ color: C.text }}>{initial ? 'Uredi stavku' : 'Nova stavka'}</div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
+        <div>
+          <div className="text-xs mb-1" style={{ color: C.textFaint }}>Naziv</div>
+          <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="npr. Krugerrand 1 oz"
+            className="w-full text-sm rounded-md px-2.5 py-1.5" style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.text }} />
+        </div>
+        <div>
+          <div className="text-xs mb-1" style={{ color: C.textFaint }}>Vrsta</div>
+          <select value={type} onChange={(e) => setType(e.target.value)}
+            className="w-full text-sm rounded-md px-2.5 py-1.5" style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.text }}>
+            {METAL_ITEM_TYPES.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
+          </select>
+        </div>
+        <div>
+          <div className="text-xs mb-1" style={{ color: C.textFaint }}>Težina po komadu (grama)</div>
+          <input type="number" step="0.001" value={weightGrams} onChange={(e) => setWeightGrams(e.target.value)} placeholder="npr. 31.1035"
+            className="w-full text-sm rounded-md px-2.5 py-1.5" style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.text }} />
+        </div>
+        <div>
+          <div className="text-xs mb-1" style={{ color: C.textFaint }}>Količina (kom)</div>
+          <input type="number" step="1" min="1" value={quantity} onChange={(e) => setQuantity(e.target.value)} placeholder="1"
+            className="w-full text-sm rounded-md px-2.5 py-1.5" style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.text }} />
+        </div>
+        <div>
+          <div className="text-xs mb-1" style={{ color: C.textFaint }}>Čistoća (‰)</div>
+          <div className="flex gap-2">
+            <select
+              value={presets.some((p) => p.value === Number(purityPermille)) ? Number(purityPermille) : ''}
+              onChange={(e) => { if (e.target.value !== '') setPurityPermille(Number(e.target.value)); }}
+              className="flex-1 text-sm rounded-md px-2.5 py-1.5" style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.text }}
+            >
+              <option value="">Ostalo (upiši desno)…</option>
+              {presets.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
+            </select>
+            <input type="number" step="0.1" value={purityPermille} onChange={(e) => setPurityPermille(e.target.value)} placeholder="999.9"
+              className="w-24 text-sm rounded-md px-2.5 py-1.5" style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.text }} />
+          </div>
+        </div>
+        <div>
+          <div className="text-xs mb-1" style={{ color: C.textFaint }}>Nabavna cijena, ukupno (€, opcionalno)</div>
+          <input type="number" value={purchasePrice} onChange={(e) => setPurchasePrice(e.target.value)} placeholder="0"
+            className="w-full text-sm rounded-md px-2.5 py-1.5" style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.text, filter: hide ? 'blur(5px)' : 'none' }} />
+        </div>
+        <div>
+          <div className="text-xs mb-1" style={{ color: C.textFaint }}>Datum nabave (opcionalno)</div>
+          <input type="month" value={purchaseDate} onChange={(e) => setPurchaseDate(e.target.value)}
+            className="w-full text-sm rounded-md px-2.5 py-1.5" style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.text }} />
+        </div>
+        <div>
+          <div className="text-xs mb-1" style={{ color: C.textFaint }}>Napomena (opcionalno)</div>
+          <input value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="npr. gdje se čuva, serijski broj..."
+            className="w-full text-sm rounded-md px-2.5 py-1.5" style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.text }} />
+        </div>
+      </div>
+      <div className="flex items-center justify-end gap-2">
+        <button onClick={onCancel} className="text-sm px-3.5 py-1.5 rounded-md" style={{ color: C.textMuted, border: `1px solid ${C.border}` }}>Odustani</button>
+        <button
+          disabled={!canSave}
+          onClick={() => onSave({
+            id: initial?.id || uid(),
+            type, label: label.trim(),
+            weightGrams: Number(weightGrams), purityPermille: Number(purityPermille), quantity: Number(quantity),
+            purchasePrice: purchasePrice === '' ? null : Number(purchasePrice),
+            purchaseDate: purchaseDate || null, notes: notes.trim(),
+          })}
+          className="text-sm px-4 py-1.5 rounded-md font-semibold"
+          style={{ background: canSave ? C.goldSoft : C.borderSoft, color: canSave ? C.bg : C.textFaint, cursor: canSave ? 'pointer' : 'not-allowed' }}
+        >
+          Spremi
+        </button>
+      </div>
+    </Card>
+  );
+}
+
+function MetalItemCard({ item, prices, onEdit, onDelete, hide }) {
+  const t = findMetalItemType(item.type);
+  const meta = METAL_META[t.metal];
+  const value = computeMetalItemValue(item, prices);
+  const hasPurchase = item.purchasePrice !== null && item.purchasePrice !== undefined && item.purchasePrice !== '';
+  const change = hasPurchase ? value - Number(item.purchasePrice) : null;
+
+  return (
+    <Card style={{ padding: '14px 16px', borderLeft: `3px solid ${meta.color}` }}>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="text-sm font-semibold" style={{ color: C.text }}>{item.label}</div>
+          <div className="text-xs mt-0.5" style={{ color: C.textFaint }}>
+            {t.label} · {item.quantity} × {item.weightGrams} g · {item.purityPermille}‰
+            {item.purchaseDate && <> · nabavljeno {monthLabel(item.purchaseDate)}</>}
+          </div>
+          {item.notes && <div className="text-xs mt-0.5" style={{ color: C.textFaint }}>{item.notes}</div>}
+        </div>
+        <div className="text-right">
+          <div style={{ color: C.text, fontSize: 17, fontVariantNumeric: 'tabular-nums' }}>{mFmt(hide, value)}</div>
+          {change !== null && (
+            <div className="text-xs" style={{ color: change < 0 ? C.rust : C.tealSoft, fontVariantNumeric: 'tabular-nums' }}>
+              {mFmtSigned(hide, change)} od nabave
+            </div>
+          )}
+        </div>
+      </div>
+      <div className="flex items-center gap-3 mt-2.5">
+        <button onClick={() => onEdit(item)} className="text-xs" style={{ color: C.textMuted }}>Uredi</button>
+        <button onClick={() => onDelete(item.id)} className="text-xs" style={{ color: C.textFaint }}>Obriši</button>
+      </div>
+    </Card>
+  );
+}
+
+function PreciousMetals({ metalItems, setMetalItems, priceOverrides, setPriceOverrides, hide, onToggleHide }) {
+  const { prices: livePrices, loading, error, refresh } = useMetalPrices();
+  const [adding, setAdding] = useState(false);
+  const [editingId, setEditingId] = useState(null);
+
+  // Efektivne cijene za izračun: ručni override (ako je postavljen) inače live cijena.
+  const hasGoldOverride = priceOverrides?.goldEurPerGram !== undefined && priceOverrides?.goldEurPerGram !== null && priceOverrides?.goldEurPerGram !== '';
+  const hasSilverOverride = priceOverrides?.silverEurPerGram !== undefined && priceOverrides?.silverEurPerGram !== null && priceOverrides?.silverEurPerGram !== '';
+  const effectivePrices = {
+    gold: { eurPerGram: hasGoldOverride ? Number(priceOverrides.goldEurPerGram) : livePrices?.gold?.eurPerGram },
+    silver: { eurPerGram: hasSilverOverride ? Number(priceOverrides.silverEurPerGram) : livePrices?.silver?.eurPerGram },
+  };
+
+  const totals = computeMetalTotals(metalItems, effectivePrices);
+  const editingItem = editingId ? metalItems.find((m) => m.id === editingId) : null;
+
+  const handleSave = (item) => {
+    setMetalItems((prev) => {
+      const exists = prev.some((m) => m.id === item.id);
+      return exists ? prev.map((m) => (m.id === item.id ? item : m)) : [...prev, item];
+    });
+    setAdding(false);
+    setEditingId(null);
+  };
+
+  const handleDelete = (id) => {
+    const m = metalItems.find((x) => x.id === id);
+    const ok = window.confirm(`Obrisati "${m?.label}"? Ova radnja se ne može poništiti.`);
+    if (ok) setMetalItems((prev) => prev.filter((x) => x.id !== id));
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex justify-end">
+        <PrivacyButton on={hide} onToggle={onToggleHide} label="iznose na ovoj stranici" />
+      </div>
+
+      <Card style={{ padding: '20px 24px' }}>
+        <div className="text-xs uppercase tracking-wide" style={{ color: C.textFaint, letterSpacing: '0.08em' }}>Plemeniti metali · trenutna protuvrijednost</div>
+        <div style={{ fontFamily: 'Georgia, "Iowan Old Style", serif', fontSize: 34, color: C.text, fontVariantNumeric: 'tabular-nums', lineHeight: 1.2 }}>{mFmt(hide, totals.total)}</div>
+        <div className="flex flex-wrap gap-4 text-sm mt-2">
+          <div><span style={{ color: C.textFaint }}>Zlato: </span><span style={{ color: METAL_META.gold.color, fontVariantNumeric: 'tabular-nums' }}>{mFmt(hide, totals.gold)}</span></div>
+          <div><span style={{ color: C.textFaint }}>Srebro: </span><span style={{ color: METAL_META.silver.color, fontVariantNumeric: 'tabular-nums' }}>{mFmt(hide, totals.silver)}</span></div>
+        </div>
+        <div className="text-xs mt-2" style={{ color: C.textFaint }}>
+          Ovo je odvojena evidencija fizičkih komada — nije automatski dio Neto vrijednosti (Pregled). Ako želiš da se broji, prepiši ukupan iznos za zlato/srebro ručno u kategorije "Zlato"/"Srebro" kod mjesečnog Unosa.
+        </div>
+      </Card>
+
+      <MetalPricePanel prices={livePrices} loading={loading} error={error} onRefresh={refresh} overrides={priceOverrides} setOverrides={setPriceOverrides} />
+
+      {!adding && !editingId && (
+        <button onClick={() => setAdding(true)} className="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md" style={{ color: C.bg, background: C.goldSoft }}>
+          <Plus size={13} /> Dodaj stavku
+        </button>
+      )}
+
+      {adding && <MetalItemForm onSave={handleSave} onCancel={() => setAdding(false)} hide={hide} />}
+      {editingItem && <MetalItemForm initial={editingItem} onSave={handleSave} onCancel={() => setEditingId(null)} hide={hide} />}
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        {metalItems.map((m) => (
+          <MetalItemCard key={m.id} item={m} prices={effectivePrices} onEdit={(x) => setEditingId(x.id)} onDelete={handleDelete} hide={hide} />
+        ))}
+      </div>
+
+      {metalItems.length === 0 && !adding && (
+        <Card style={{ padding: '32px', textAlign: 'center' }}>
+          <p className="text-sm" style={{ color: C.textMuted }}>Nema unesenih stavki. Dodaj zlatnike, zlatne poluge, srebrnjake ili srebrne poluge — vrijednost se računa automatski prema trenutnoj tržišnoj cijeni.</p>
+        </Card>
+      )}
+    </div>
+  );
+}
+
+function InvestmentForm({ initial, onSave, onCancel, hide }) {
+  const [label, setLabel] = useState(initial?.label || '');
+  const [type, setType] = useState(initial?.type || INVESTMENT_TYPES[0]);
+  const [buyDate, setBuyDate] = useState(initial?.buyDate || thisMonthStr());
+  const [buyPrice, setBuyPrice] = useState(initial?.buyPrice ?? '');
+  const [quantity, setQuantity] = useState(initial?.quantity ?? '');
+  const [currentPrice, setCurrentPrice] = useState(initial?.currentPrice ?? '');
+  const [notes, setNotes] = useState(initial?.notes || '');
+
+  const canSave = label.trim() && buyDate
+    && buyPrice !== '' && !Number.isNaN(Number(buyPrice))
+    && quantity !== '' && !Number.isNaN(Number(quantity)) && Number(quantity) > 0;
+
+  return (
+    <Card style={{ padding: '18px 20px' }}>
+      <div className="text-sm font-semibold mb-3" style={{ color: C.text }}>{initial ? 'Uredi ulaganje' : 'Novo ulaganje'}</div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
+        <div>
+          <div className="text-xs mb-1" style={{ color: C.textFaint }}>Naziv</div>
+          <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="npr. Trading212 - S&P 500 ETF"
+            className="w-full text-sm rounded-md px-2.5 py-1.5" style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.text }} />
+        </div>
+        <div>
+          <div className="text-xs mb-1" style={{ color: C.textFaint }}>Vrsta</div>
+          <select value={type} onChange={(e) => setType(e.target.value)}
+            className="w-full text-sm rounded-md px-2.5 py-1.5" style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.text }}>
+            {INVESTMENT_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+          </select>
+        </div>
+        <div>
+          <div className="text-xs mb-1" style={{ color: C.textFaint }}>Datum kupnje</div>
+          <input type="month" value={buyDate} onChange={(e) => setBuyDate(e.target.value)}
+            className="w-full text-sm rounded-md px-2.5 py-1.5" style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.text }} />
+        </div>
+        <div>
+          <div className="text-xs mb-1" style={{ color: C.textFaint }}>Količina</div>
+          <input type="number" step="any" value={quantity} onChange={(e) => setQuantity(e.target.value)} placeholder="npr. 12.5"
+            className="w-full text-sm rounded-md px-2.5 py-1.5" style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.text }} />
+        </div>
+        <div>
+          <div className="text-xs mb-1" style={{ color: C.textFaint }}>Kupovna cijena (po jedinici, €)</div>
+          <input type="number" step="any" value={buyPrice} onChange={(e) => setBuyPrice(e.target.value)} placeholder="0"
+            className="w-full text-sm rounded-md px-2.5 py-1.5" style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.text, filter: hide ? 'blur(5px)' : 'none' }} />
+        </div>
+        <div>
+          <div className="text-xs mb-1" style={{ color: C.textFaint }}>Trenutna cijena (po jedinici, €, opcionalno)</div>
+          <input type="number" step="any" value={currentPrice} onChange={(e) => setCurrentPrice(e.target.value)} placeholder="ažuriraj povremeno ručno"
+            className="w-full text-sm rounded-md px-2.5 py-1.5" style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.text, filter: hide ? 'blur(5px)' : 'none' }} />
+        </div>
+        <div className="md:col-span-2">
+          <div className="text-xs mb-1" style={{ color: C.textFaint }}>Napomena (opcionalno)</div>
+          <input value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="npr. broker, razlog ulaganja..."
+            className="w-full text-sm rounded-md px-2.5 py-1.5" style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.text }} />
+        </div>
+      </div>
+      <div className="flex items-center justify-end gap-2">
+        <button onClick={onCancel} className="text-sm px-3.5 py-1.5 rounded-md" style={{ color: C.textMuted, border: `1px solid ${C.border}` }}>Odustani</button>
+        <button
+          disabled={!canSave}
+          onClick={() => onSave({
+            id: initial?.id || uid(),
+            label: label.trim(), type, buyDate,
+            buyPrice: Number(buyPrice), quantity: Number(quantity),
+            currentPrice: currentPrice === '' ? null : Number(currentPrice),
+            sellDate: initial?.sellDate ?? null, sellPrice: initial?.sellPrice ?? null,
+            notes: notes.trim(),
+          })}
+          className="text-sm px-4 py-1.5 rounded-md font-semibold"
+          style={{ background: canSave ? C.goldSoft : C.borderSoft, color: canSave ? C.bg : C.textFaint, cursor: canSave ? 'pointer' : 'not-allowed' }}
+        >
+          Spremi
+        </button>
+      </div>
+    </Card>
+  );
+}
+
+function InvestmentCard({ inv, onSave, onDelete, onSell, onReopen, hide }) {
+  // Uredi je LOKALNO stanje ove kartice (kao i "selling" ispod), ne globalno
+  // stanje cijelog taba - tako klik na Uredi na jednoj kartici ne zahtijeva
+  // prethodno zatvaranje/odustajanje od uređivanja neke druge kartice.
+  const [editing, setEditing] = useState(false);
+  const [selling, setSelling] = useState(false);
+  const [sellDate, setSellDate] = useState(thisMonthStr());
+  const [sellPrice, setSellPrice] = useState('');
+  const m = computeInvestmentMetrics(inv);
+  const positive = m.returns >= 0;
+
+  if (editing) {
+    return (
+      <InvestmentForm
+        initial={inv}
+        onSave={(updated) => { onSave(updated); setEditing(false); }}
+        onCancel={() => setEditing(false)}
+        hide={hide}
+      />
+    );
+  }
+
+  return (
+    <Card style={{ padding: '14px 16px', borderLeft: `3px solid ${m.sold ? C.textFaint : (positive ? C.teal : C.rust)}` }}>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="text-sm font-semibold" style={{ color: C.text }}>{inv.label}</div>
+          <div className="text-xs mt-0.5" style={{ color: C.textFaint }}>
+            {inv.type} · {inv.quantity} × {mFmt(hide, inv.buyPrice)} · kupljeno {monthLabel(inv.buyDate)}
+            {m.sold && <> · prodano {monthLabel(inv.sellDate)} po {mFmt(hide, inv.sellPrice)}</>}
+            {!m.sold && <> · {m.months} mj. u portfelju</>}
+          </div>
+          {inv.notes && <div className="text-xs mt-0.5" style={{ color: C.textFaint, whiteSpace: 'pre-wrap' }}>{inv.notes}</div>}
+        </div>
+        <div className="text-right">
+          <div style={{ color: C.text, fontSize: 17, fontVariantNumeric: 'tabular-nums' }}>{mFmt(hide, m.currentValue)}</div>
+          <div className="text-xs inline-flex items-center gap-1" style={{ color: positive ? C.tealSoft : C.rust, fontVariantNumeric: 'tabular-nums' }}>
+            {positive ? <TrendingUp size={11} /> : <TrendingDown size={11} />}
+            {mFmtSigned(hide, m.returns)} ({positive ? '+' : ''}{m.returnsPct.toFixed(1)}%)
+          </div>
+        </div>
+      </div>
+      <div className="text-xs mt-1.5" style={{ color: C.textFaint }}>Uloženo: {mFmt(hide, m.moneyInvested)}</div>
+
+      {/* Uredi/Obriši su UVIJEK vidljivi i klikabilni, neovisno o tome je li
+          otvoren mini-formular za prodaju ispod - ranije je "Prodaj" REPLACAO
+          ovaj red pa se činilo da "negdje mogu, negdje ne mogu" kliknuti Uredi. */}
+      <div className="flex items-center gap-3 mt-2.5">
+        {m.sold ? (
+          <button onClick={() => onReopen(inv.id)} className="inline-flex items-center gap-1 text-xs" style={{ color: C.tealSoft }}><RotateCcw size={12} /> Vrati u aktivna</button>
+        ) : (
+          <button onClick={() => setSelling((s) => !s)} className="text-xs" style={{ color: C.tealSoft }}>{selling ? 'Odustani od prodaje' : 'Prodaj'}</button>
+        )}
+        <button onClick={() => setEditing(true)} className="text-xs" style={{ color: C.textMuted }}>Uredi</button>
+        <button onClick={() => onDelete(inv.id)} className="text-xs" style={{ color: C.textFaint }}>Obriši</button>
+      </div>
+
+      {selling && (
+        <div className="flex flex-wrap items-center gap-2 mt-2.5">
+          <input type="month" value={sellDate} onChange={(e) => setSellDate(e.target.value)}
+            className="text-xs rounded-md px-2 py-1.5" style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.text }} />
+          <input type="number" step="any" autoFocus value={sellPrice} onChange={(e) => setSellPrice(e.target.value)} placeholder="Prodajna cijena po jedinici (€)"
+            className="flex-1 text-xs rounded-md px-2 py-1.5" style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.text, filter: hide ? 'blur(5px)' : 'none' }} />
+          <button
+            disabled={sellPrice === '' || Number.isNaN(Number(sellPrice))}
+            onClick={() => { onSell(inv.id, sellDate, Number(sellPrice)); setSelling(false); setSellPrice(''); }}
+            className="text-xs px-3 py-1.5 rounded-md font-semibold" style={{ background: C.goldSoft, color: C.bg }}
+          >Spremi</button>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+// Kartice po vrsti ulaganja (Kriptovaluta, Dionica, Nekretnina...) - grupira
+// dugu ravnu listu u sažete cjeline sa zbrojem po grupi, umjesto da sve
+// stavke stoje "nabacano" jedna do druge (npr. 27 zasebnih BTC kupnji).
+function InvestmentGroup({ type, items, onSave, onDelete, onSell, onReopen, hide, defaultOpen }) {
+  const [open, setOpen] = useState(defaultOpen);
+  const color = INVESTMENT_TYPE_COLOR[type] || C.textFaint;
+  const summary = items.reduce((acc, inv) => {
+    const m = computeInvestmentMetrics(inv);
+    acc.invested += m.moneyInvested; acc.value += m.currentValue; acc.returns += m.returns;
+    return acc;
+  }, { invested: 0, value: 0, returns: 0 });
+  const pct = summary.invested ? (summary.returns / summary.invested) * 100 : 0;
+
+  return (
+    <Card style={{ padding: 0, overflow: 'hidden' }}>
+      <button onClick={() => setOpen((o) => !o)} className="w-full flex items-center justify-between gap-3 px-4 py-3">
+        <div className="flex items-center gap-2.5">
+          <span style={{ width: 10, height: 10, borderRadius: 999, background: color, flexShrink: 0 }} />
+          <span className="text-sm font-semibold" style={{ color: C.text }}>{type}</span>
+          <span className="text-xs" style={{ color: C.textFaint }}>({items.length})</span>
+        </div>
+        <div className="flex items-center gap-3">
+          <span className="text-sm" style={{ color: C.text, fontVariantNumeric: 'tabular-nums' }}>{mFmt(hide, summary.value)}</span>
+          <span className="text-xs inline-flex items-center gap-1" style={{ color: summary.returns >= 0 ? C.tealSoft : C.rust, fontVariantNumeric: 'tabular-nums' }}>
+            {mFmtSigned(hide, summary.returns)} ({summary.returns >= 0 ? '+' : ''}{pct.toFixed(1)}%)
+          </span>
+          {open ? <ChevronUp size={16} color={C.textFaint} /> : <ChevronDown size={16} color={C.textFaint} />}
+        </div>
+      </button>
+      {open && (
+        <div className="px-4 pb-4 grid grid-cols-1 md:grid-cols-2 gap-3">
+          {items.map((inv) => (
+            <InvestmentCard key={inv.id} inv={inv} onSave={onSave} onDelete={onDelete} onSell={onSell} onReopen={onReopen} hide={hide} />
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+// Grupira listu ulaganja po vrsti - poznate vrste (INVESTMENT_TYPES) prvo,
+// zadanim redoslijedom, a bilo koja druga (ručno upisana) vrsta iza, abecedno.
+const groupInvestmentsByType = (list) => {
+  const map = {};
+  list.forEach((inv) => { (map[inv.type] = map[inv.type] || []).push(inv); });
+  const known = INVESTMENT_TYPES.filter((t) => map[t]?.length).map((t) => ({ type: t, items: map[t] }));
+  const unknown = Object.keys(map).filter((t) => !INVESTMENT_TYPES.includes(t)).sort().map((t) => ({ type: t, items: map[t] }));
+  return [...known, ...unknown];
+};
+
+function Investments({ investments, setInvestments, hide, onToggleHide }) {
+  const [adding, setAdding] = useState(false);
+
+  const active = investments.filter((i) => !isInvestmentSold(i));
+  const past = investments.filter(isInvestmentSold);
+
+  const activeSummary = active.reduce((acc, inv) => {
+    const m = computeInvestmentMetrics(inv);
+    acc.invested += m.moneyInvested; acc.value += m.currentValue; acc.returns += m.returns;
+    return acc;
+  }, { invested: 0, value: 0, returns: 0 });
+  const activeReturnsPct = activeSummary.invested ? (activeSummary.returns / activeSummary.invested) * 100 : 0;
+
+  const realizedReturns = past.reduce((s, inv) => s + computeInvestmentMetrics(inv).returns, 0);
+
+  const handleSave = (inv) => {
+    setInvestments((prev) => {
+      const exists = prev.some((i) => i.id === inv.id);
+      return exists ? prev.map((i) => (i.id === inv.id ? inv : i)) : [...prev, inv];
+    });
+    setAdding(false);
+  };
+
+  const handleDelete = (id) => {
+    const inv = investments.find((x) => x.id === id);
+    const ok = window.confirm(`Obrisati "${inv?.label}"? Ova radnja se ne može poništiti.`);
+    if (ok) setInvestments((prev) => prev.filter((x) => x.id !== id));
+  };
+
+  const handleSell = (id, sellDate, sellPrice) => {
+    setInvestments((prev) => prev.map((i) => (i.id === id ? { ...i, sellDate, sellPrice } : i)));
+  };
+
+  const handleReopen = (id) => {
+    setInvestments((prev) => prev.map((i) => (i.id === id ? { ...i, sellDate: null, sellPrice: null } : i)));
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex justify-end">
+        <PrivacyButton on={hide} onToggle={onToggleHide} label="iznose na ovoj stranici" />
+      </div>
+
+      <Card style={{ padding: '20px 24px' }}>
+        <div className="text-xs uppercase tracking-wide" style={{ color: C.textFaint, letterSpacing: '0.08em' }}>Ulaganja · aktivne pozicije</div>
+        <div style={{ fontFamily: 'Georgia, "Iowan Old Style", serif', fontSize: 34, color: C.text, fontVariantNumeric: 'tabular-nums', lineHeight: 1.2 }}>{mFmt(hide, activeSummary.value)}</div>
+        <div className="flex flex-wrap gap-4 text-sm mt-2">
+          <div><span style={{ color: C.textFaint }}>Uloženo: </span><span style={{ color: C.text, fontVariantNumeric: 'tabular-nums' }}>{mFmt(hide, activeSummary.invested)}</span></div>
+          <div><span style={{ color: C.textFaint }}>Dobit/gubitak: </span><span style={{ color: activeSummary.returns >= 0 ? C.tealSoft : C.rust, fontVariantNumeric: 'tabular-nums' }}>{mFmtSigned(hide, activeSummary.returns)} ({activeSummary.returns >= 0 ? '+' : ''}{activeReturnsPct.toFixed(1)}%)</span></div>
+          {past.length > 0 && <div><span style={{ color: C.textFaint }}>Realizirano (prodano): </span><span style={{ color: realizedReturns >= 0 ? C.tealSoft : C.rust, fontVariantNumeric: 'tabular-nums' }}>{mFmtSigned(hide, realizedReturns)}</span></div>}
+        </div>
+        <div className="text-xs mt-2" style={{ color: C.textFaint }}>
+          "Trenutna cijena" se ažurira ručno po ulaganju (isto kao u tvom Notion dnevniku) — ovo nije automatski dio Neto vrijednosti (Pregled).
+        </div>
+      </Card>
+
+      {!adding && (
+        <button onClick={() => setAdding(true)} className="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md" style={{ color: C.bg, background: C.goldSoft }}>
+          <Plus size={13} /> Dodaj ulaganje
+        </button>
+      )}
+      {adding && <InvestmentForm onSave={handleSave} onCancel={() => setAdding(false)} hide={hide} />}
+
+      <div>
+        <div className="text-sm font-semibold mb-2" style={{ color: C.text }}>Aktivna ulaganja</div>
+        {active.length === 0 ? (
+          <Card style={{ padding: '24px', textAlign: 'center' }}><p className="text-sm" style={{ color: C.textMuted }}>Nema aktivnih ulaganja.</p></Card>
+        ) : (
+          <div className="space-y-3">
+            {groupInvestmentsByType(active).map((g) => (
+              <InvestmentGroup
+                key={g.type} type={g.type} items={g.items}
+                onSave={handleSave} onDelete={handleDelete} onSell={handleSell} onReopen={handleReopen}
+                hide={hide} defaultOpen={g.items.length <= 6}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+
+      {past.length > 0 && (
+        <div>
+          <div className="text-sm font-semibold mb-2 mt-2" style={{ color: C.text }}>Prošla ulaganja (prodano)</div>
+          <div className="space-y-3">
+            {groupInvestmentsByType(past).map((g) => (
+              <InvestmentGroup
+                key={g.type} type={g.type} items={g.items}
+                onSave={handleSave} onDelete={handleDelete} onSell={handleSell} onReopen={handleReopen}
+                hide={hide} defaultOpen={g.items.length <= 6}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function MonthPickerModal({ existingMonths, onConfirm, onCancel }) {
   const now = new Date();
   const [y, setY] = useState(now.getFullYear());
@@ -1133,6 +1842,11 @@ export default function App() {
   const [categories, setCategories] = useState(DEFAULT_CATEGORIES);
   const [snapshots, setSnapshots] = useState([]);
   const [consumptionAssets, setConsumptionAssets] = useState([]);
+  const [metalItems, setMetalItems] = useState([]);
+  const [investments, setInvestments] = useState([]);
+  const [settings, setSettings] = useState({});
+  const priceOverrides = { goldEurPerGram: settings.goldEurPerGram ?? '', silverEurPerGram: settings.silverEurPerGram ?? '' };
+  const setPriceOverrides = (next) => setSettings((prev) => ({ ...prev, goldEurPerGram: next.goldEurPerGram, silverEurPerGram: next.silverEurPerGram }));
   const [loaded, setLoaded] = useState(false);
   const [tab, setTab] = useState('pregled');
   const [draft, setDraft] = useState(null);
@@ -1149,7 +1863,7 @@ export default function App() {
   //   na false pa se master gumb automatski "oslobodi" (nije potreban extra kod)
   const [pagePrivacy, setPagePrivacy] = useState({
     pregled: false, unos: false, povijest: false, kategorije: false,
-    diverzifikacija: false, vrstaImovine: false, potrosnaImovina: false,
+    diverzifikacija: false, vrstaImovine: false, potrosnaImovina: false, plemenitiMetali: false, ulaganja: false,
   });
   const allPrivacyOn = Object.values(pagePrivacy).every(Boolean);
   const toggleAllPrivacy = () => {
@@ -1173,6 +1887,9 @@ export default function App() {
         if (parsed.categories && parsed.categories.length) setCategories(parsed.categories);
         if (parsed.snapshots) setSnapshots(parsed.snapshots);
         if (parsed.consumptionAssets) setConsumptionAssets(parsed.consumptionAssets);
+        if (parsed.metalItems) setMetalItems(parsed.metalItems);
+        if (parsed.settings) setSettings(parsed.settings);
+        if (parsed.investments) setInvestments(parsed.investments);
         setLoaded(true);
       } catch (e) {
         if (cancelled) return;
@@ -1200,7 +1917,7 @@ export default function App() {
             // ovdje je uvijek namjerno (korisnik je stvarno obrisao sve).
             'X-Confirm-Wipe': snapshots.length === 0 ? 'true' : 'false',
           },
-          body: JSON.stringify({ categories, snapshots, consumptionAssets }),
+          body: JSON.stringify({ categories, snapshots, consumptionAssets, metalItems, settings, investments }),
         });
         if (!res.ok) throw new Error('save failed');
       } catch (e) {
@@ -1208,7 +1925,7 @@ export default function App() {
         setTimeout(() => setNotice(''), 4500);
       }
     })();
-  }, [categories, snapshots, consumptionAssets, loaded]);
+  }, [categories, snapshots, consumptionAssets, metalItems, settings, investments, loaded]);
 
   const sorted = useMemo(() => [...snapshots].sort((a, b) => a.month.localeCompare(b.month)), [snapshots]);
 
@@ -1301,6 +2018,8 @@ export default function App() {
             <TabButton id="diverzifikacija" label="Diverzifikacija" icon={PieChartIcon} activeTab={tab} onSelect={setTab} />
             <TabButton id="vrstaImovine" label="Vrsta imovine" icon={Layers} activeTab={tab} onSelect={setTab} />
             <TabButton id="potrosnaImovina" label="Potrošna imovina" icon={Car} activeTab={tab} onSelect={setTab} />
+            <TabButton id="plemenitiMetali" label="Plemeniti metali" icon={Coins} activeTab={tab} onSelect={setTab} />
+            <TabButton id="ulaganja" label="Ulaganja" icon={Briefcase} activeTab={tab} onSelect={setTab} />
           </div>
         </div>
 
@@ -1359,6 +2078,19 @@ export default function App() {
           <ConsumptionAssets
             consumptionAssets={consumptionAssets} setConsumptionAssets={setConsumptionAssets}
             hide={pagePrivacy.potrosnaImovina} onToggleHide={() => togglePagePrivacy('potrosnaImovina')}
+          />
+        )}
+        {tab === 'plemenitiMetali' && (
+          <PreciousMetals
+            metalItems={metalItems} setMetalItems={setMetalItems}
+            priceOverrides={priceOverrides} setPriceOverrides={setPriceOverrides}
+            hide={pagePrivacy.plemenitiMetali} onToggleHide={() => togglePagePrivacy('plemenitiMetali')}
+          />
+        )}
+        {tab === 'ulaganja' && (
+          <Investments
+            investments={investments} setInvestments={setInvestments}
+            hide={pagePrivacy.ulaganja} onToggleHide={() => togglePagePrivacy('ulaganja')}
           />
         )}
       </div>

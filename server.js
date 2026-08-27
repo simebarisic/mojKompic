@@ -15,6 +15,56 @@ await db.init();
 const app = express();
 app.use(express.json({ limit: '5mb' }));
 
+// ---- Cijene zlata/srebra (za tab "Plemeniti metali") ----
+// Dohvaća spot cijenu s api.gold-api.com (USD/trojskoj unci, bez API ključa)
+// i tečaj USD->EUR s api.frankfurter.dev (ECB, bez API ključa), pa pretvara
+// u EUR po gramu. Rezultat se kešira u memoriji da se izvori ne zovu na
+// svaki render/refresh (i da app preživi kratkotrajne ispade tih servisa).
+const GRAMS_PER_TROY_OUNCE = 31.1034768;
+const METAL_PRICE_CACHE_MS = 10 * 60 * 1000; // 10 min
+let metalPriceCache = { data: null, fetchedAt: 0 };
+
+async function fetchMetalPrices() {
+  const [xauRes, xagRes, fxRes] = await Promise.all([
+    fetch('https://api.gold-api.com/price/XAU'),
+    fetch('https://api.gold-api.com/price/XAG'),
+    fetch('https://api.frankfurter.dev/v1/latest?from=USD&to=EUR'),
+  ]);
+  if (!xauRes.ok || !xagRes.ok) throw new Error('Izvor cijene metala nije dostupan.');
+  if (!fxRes.ok) throw new Error('Izvor tečaja nije dostupan.');
+  const [xau, xag, fx] = await Promise.all([xauRes.json(), xagRes.json(), fxRes.json()]);
+  const usdToEur = fx?.rates?.EUR;
+  if (!xau?.price || !xag?.price || !usdToEur) throw new Error('Nepotpun odgovor izvora cijena.');
+
+  const toEurPerGram = (usdPerOz) => (usdPerOz / GRAMS_PER_TROY_OUNCE) * usdToEur;
+
+  return {
+    gold: { eurPerGram: toEurPerGram(xau.price), usdPerOz: xau.price, updatedAt: xau.updatedAt || null },
+    silver: { eurPerGram: toEurPerGram(xag.price), usdPerOz: xag.price, updatedAt: xag.updatedAt || null },
+    fx: { usdToEur, date: fx.date || null },
+    fetchedAt: new Date().toISOString(),
+  };
+}
+
+app.get('/api/metal-prices', async (req, res) => {
+  const now = Date.now();
+  if (metalPriceCache.data && now - metalPriceCache.fetchedAt < METAL_PRICE_CACHE_MS) {
+    return res.json({ ...metalPriceCache.data, cached: true, stale: false });
+  }
+  try {
+    const data = await fetchMetalPrices();
+    metalPriceCache = { data, fetchedAt: now };
+    res.json({ ...data, cached: false, stale: false });
+  } catch (e) {
+    console.error('Dohvat cijene zlata/srebra nije uspio:', e.message);
+    if (metalPriceCache.data) {
+      // Vrati zadnju poznatu cijenu (bolje stara nego nikakva), ali označi da je "stale".
+      return res.json({ ...metalPriceCache.data, cached: true, stale: true });
+    }
+    res.status(502).json({ error: 'Ne mogu dohvatiti trenutnu cijenu zlata/srebra. Unesi cijenu ručno.' });
+  }
+});
+
 app.get('/api/state', async (req, res) => {
   try {
     res.json(await db.getState());

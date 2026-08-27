@@ -56,6 +56,35 @@ export async function init() {
       notes TEXT,
       sort_order INTEGER NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS metal_items (
+      id TEXT PRIMARY KEY,
+      type TEXT NOT NULL,
+      label TEXT NOT NULL,
+      weight_grams REAL NOT NULL,
+      purity_permille REAL NOT NULL,
+      quantity REAL NOT NULL,
+      purchase_price REAL,
+      purchase_date TEXT,
+      notes TEXT,
+      sort_order INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS app_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT
+    );
+    CREATE TABLE IF NOT EXISTS investments (
+      id TEXT PRIMARY KEY,
+      label TEXT NOT NULL,
+      type TEXT NOT NULL,
+      buy_date TEXT NOT NULL,
+      buy_price REAL NOT NULL,
+      quantity REAL NOT NULL,
+      current_price REAL,
+      sell_date TEXT,
+      sell_price REAL,
+      notes TEXT,
+      sort_order INTEGER NOT NULL
+    );
   `);
 }
 
@@ -72,6 +101,20 @@ export async function getState() {
            override_date AS "overrideDate", notes
     FROM consumption_assets ORDER BY sort_order
   `).all();
+  const metalItems = database.prepare(`
+    SELECT id, type, label, weight_grams AS "weightGrams", purity_permille AS "purityPermille",
+           quantity, purchase_price AS "purchasePrice", purchase_date AS "purchaseDate", notes
+    FROM metal_items ORDER BY sort_order
+  `).all();
+  const settingsRows = database.prepare('SELECT key, value FROM app_settings').all();
+  const settings = Object.fromEntries(settingsRows.map((r) => {
+    try { return [r.key, JSON.parse(r.value)]; } catch { return [r.key, null]; }
+  }));
+  const investments = database.prepare(`
+    SELECT id, label, type, buy_date AS "buyDate", buy_price AS "buyPrice", quantity,
+           current_price AS "currentPrice", sell_date AS "sellDate", sell_price AS "sellPrice", notes
+    FROM investments ORDER BY sort_order
+  `).all();
 
   const snapshots = snapshotRows.map((s) => ({
     id: s.id,
@@ -81,13 +124,13 @@ export async function getState() {
     expenses: expenseRows.filter((r) => r.snapshot_id === s.id).map((r) => ({ id: r.id, label: r.label, amount: r.amount })),
   }));
 
-  return { categories, snapshots, consumptionAssets };
+  return { categories, snapshots, consumptionAssets, metalItems, settings, investments };
 }
 
-export async function saveState({ categories = [], snapshots = [], consumptionAssets = [] }) {
+export async function saveState({ categories = [], snapshots = [], consumptionAssets = [], metalItems = [], settings = {}, investments = [] }) {
   const database = getDb();
   const writeAll = database.transaction(() => {
-    database.exec('DELETE FROM categories; DELETE FROM snapshots; DELETE FROM snapshot_values; DELETE FROM income_items; DELETE FROM expense_items; DELETE FROM consumption_assets;');
+    database.exec('DELETE FROM categories; DELETE FROM snapshots; DELETE FROM snapshot_values; DELETE FROM income_items; DELETE FROM expense_items; DELETE FROM consumption_assets; DELETE FROM metal_items; DELETE FROM app_settings; DELETE FROM investments;');
 
     const insCat = database.prepare('INSERT INTO categories (id, label, grp, sort_order) VALUES (?, ?, ?, ?)');
     categories.forEach((c, i) => insCat.run(c.id, c.label, c.group, i));
@@ -119,6 +162,33 @@ export async function saveState({ categories = [], snapshots = [], consumptionAs
       Number(a.depreciationRate) || 0,
       a.valueOverride === '' || a.valueOverride === null || a.valueOverride === undefined ? null : Number(a.valueOverride),
       a.overrideDate || null, a.notes || '', i
+    ));
+
+    const insMetal = database.prepare(`
+      INSERT INTO metal_items
+        (id, type, label, weight_grams, purity_permille, quantity, purchase_price, purchase_date, notes, sort_order)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    metalItems.forEach((m, i) => insMetal.run(
+      m.id, m.type, m.label, Number(m.weightGrams) || 0, Number(m.purityPermille) || 0, Number(m.quantity) || 0,
+      m.purchasePrice === '' || m.purchasePrice === null || m.purchasePrice === undefined ? null : Number(m.purchasePrice),
+      m.purchaseDate || null, m.notes || '', i
+    ));
+
+    const insSetting = database.prepare('INSERT INTO app_settings (key, value) VALUES (?, ?)');
+    Object.entries(settings || {}).forEach(([key, value]) => insSetting.run(key, JSON.stringify(value ?? null)));
+
+    const insInvestment = database.prepare(`
+      INSERT INTO investments
+        (id, label, type, buy_date, buy_price, quantity, current_price, sell_date, sell_price, notes, sort_order)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    investments.forEach((inv, i) => insInvestment.run(
+      inv.id, inv.label, inv.type, inv.buyDate, Number(inv.buyPrice) || 0, Number(inv.quantity) || 0,
+      inv.currentPrice === '' || inv.currentPrice === null || inv.currentPrice === undefined ? null : Number(inv.currentPrice),
+      inv.sellDate || null,
+      inv.sellPrice === '' || inv.sellPrice === null || inv.sellPrice === undefined ? null : Number(inv.sellPrice),
+      inv.notes || '', i
     ));
   });
 

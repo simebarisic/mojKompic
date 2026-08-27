@@ -53,6 +53,35 @@ export async function init() {
       notes TEXT,
       sort_order INTEGER NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS metal_items (
+      id TEXT PRIMARY KEY,
+      type TEXT NOT NULL,
+      label TEXT NOT NULL,
+      weight_grams DOUBLE PRECISION NOT NULL,
+      purity_permille DOUBLE PRECISION NOT NULL,
+      quantity DOUBLE PRECISION NOT NULL,
+      purchase_price DOUBLE PRECISION,
+      purchase_date TEXT,
+      notes TEXT,
+      sort_order INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS app_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT
+    );
+    CREATE TABLE IF NOT EXISTS investments (
+      id TEXT PRIMARY KEY,
+      label TEXT NOT NULL,
+      type TEXT NOT NULL,
+      buy_date TEXT NOT NULL,
+      buy_price DOUBLE PRECISION NOT NULL,
+      quantity DOUBLE PRECISION NOT NULL,
+      current_price DOUBLE PRECISION,
+      sell_date TEXT,
+      sell_price DOUBLE PRECISION,
+      notes TEXT,
+      sort_order INTEGER NOT NULL
+    );
   `);
 }
 
@@ -68,6 +97,17 @@ export async function getState() {
            depreciation_rate AS "depreciationRate", value_override AS "valueOverride",
            override_date AS "overrideDate", notes
     FROM consumption_assets ORDER BY sort_order
+  `);
+  const { rows: metalRows } = await p.query(`
+    SELECT id, type, label, weight_grams AS "weightGrams", purity_permille AS "purityPermille",
+           quantity, purchase_price AS "purchasePrice", purchase_date AS "purchaseDate", notes
+    FROM metal_items ORDER BY sort_order
+  `);
+  const { rows: settingsRows } = await p.query('SELECT key, value FROM app_settings');
+  const { rows: investmentRows } = await p.query(`
+    SELECT id, label, type, buy_date AS "buyDate", buy_price AS "buyPrice", quantity,
+           current_price AS "currentPrice", sell_date AS "sellDate", sell_price AS "sellPrice", notes
+    FROM investments ORDER BY sort_order
   `);
 
   const snapshots = snapshotRows.map((s) => ({
@@ -85,10 +125,30 @@ export async function getState() {
     valueOverride: a.valueOverride === null ? null : Number(a.valueOverride),
   }));
 
-  return { categories, snapshots, consumptionAssets };
+  const metalItems = metalRows.map((m) => ({
+    ...m,
+    weightGrams: Number(m.weightGrams),
+    purityPermille: Number(m.purityPermille),
+    quantity: Number(m.quantity),
+    purchasePrice: m.purchasePrice === null ? null : Number(m.purchasePrice),
+  }));
+
+  const settings = Object.fromEntries(settingsRows.map((r) => {
+    try { return [r.key, JSON.parse(r.value)]; } catch { return [r.key, null]; }
+  }));
+
+  const investments = investmentRows.map((inv) => ({
+    ...inv,
+    buyPrice: Number(inv.buyPrice),
+    quantity: Number(inv.quantity),
+    currentPrice: inv.currentPrice === null ? null : Number(inv.currentPrice),
+    sellPrice: inv.sellPrice === null ? null : Number(inv.sellPrice),
+  }));
+
+  return { categories, snapshots, consumptionAssets, metalItems, settings, investments };
 }
 
-export async function saveState({ categories = [], snapshots = [], consumptionAssets = [] }) {
+export async function saveState({ categories = [], snapshots = [], consumptionAssets = [], metalItems = [], settings = {}, investments = [] }) {
   const p = getPool();
   const client = await p.connect();
   try {
@@ -99,6 +159,9 @@ export async function saveState({ categories = [], snapshots = [], consumptionAs
     await client.query('DELETE FROM snapshots');
     await client.query('DELETE FROM categories');
     await client.query('DELETE FROM consumption_assets');
+    await client.query('DELETE FROM metal_items');
+    await client.query('DELETE FROM app_settings');
+    await client.query('DELETE FROM investments');
 
     for (let i = 0; i < categories.length; i++) {
       const c = categories[i];
@@ -130,6 +193,37 @@ export async function saveState({ categories = [], snapshots = [], consumptionAs
           Number(a.depreciationRate) || 0,
           a.valueOverride === '' || a.valueOverride === null || a.valueOverride === undefined ? null : Number(a.valueOverride),
           a.overrideDate || null, a.notes || '', i,
+        ]
+      );
+    }
+    for (let i = 0; i < metalItems.length; i++) {
+      const m = metalItems[i];
+      await client.query(
+        `INSERT INTO metal_items
+          (id, type, label, weight_grams, purity_permille, quantity, purchase_price, purchase_date, notes, sort_order)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+        [
+          m.id, m.type, m.label, Number(m.weightGrams) || 0, Number(m.purityPermille) || 0, Number(m.quantity) || 0,
+          m.purchasePrice === '' || m.purchasePrice === null || m.purchasePrice === undefined ? null : Number(m.purchasePrice),
+          m.purchaseDate || null, m.notes || '', i,
+        ]
+      );
+    }
+    for (const [key, value] of Object.entries(settings || {})) {
+      await client.query('INSERT INTO app_settings (key, value) VALUES ($1,$2)', [key, JSON.stringify(value ?? null)]);
+    }
+    for (let i = 0; i < investments.length; i++) {
+      const inv = investments[i];
+      await client.query(
+        `INSERT INTO investments
+          (id, label, type, buy_date, buy_price, quantity, current_price, sell_date, sell_price, notes, sort_order)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+        [
+          inv.id, inv.label, inv.type, inv.buyDate, Number(inv.buyPrice) || 0, Number(inv.quantity) || 0,
+          inv.currentPrice === '' || inv.currentPrice === null || inv.currentPrice === undefined ? null : Number(inv.currentPrice),
+          inv.sellDate || null,
+          inv.sellPrice === '' || inv.sellPrice === null || inv.sellPrice === undefined ? null : Number(inv.sellPrice),
+          inv.notes || '', i,
         ]
       );
     }
