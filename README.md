@@ -1,157 +1,78 @@
-# Moj Kompić 📒
+# Habit Tracker
 
-Osobna web aplikacija za mjesečno praćenje financijske imovine — likvidna imovina, mirovinski stupovi, obaveze, nekretnine, prihodi i rashodi.
+Full-stack habit tracker: Spring Boot (Java 21) + React (Vite) + PostgreSQL, containerized with Docker.
 
-Aplikacija radi u dva moda, bez izmjene koda:
-- **Lokalno na Macu** (development) — baza je SQLite datoteka
-- **Docker / home server** (produkcija) — baza je Postgres
+## Pokretanje
 
-Odabir je automatski: ako je postavljena `DATABASE_URL` varijabla, koristi se Postgres; inače SQLite.
-
-## Značajke
-
-- Pregled: neto vrijednost, promjena mjesec-na-mjesec, graf kretanja kroz vrijeme
-- Dva donut grafa: likvidna imovina (bez nekretnina) i ukupna neto vrijednost (s nekretninama)
-- Unos mjeseca s "kopiraj iz prošlog mjeseca"
-- Dinamičke kategorije
-- Povijest svih mjeseci s uređivanjem i brisanjem
-- Praćenje prihoda i rashoda po mjesecu
-
-## Tehnologije
-
-- **Frontend:** React + Vite, Tailwind CSS, Recharts, lucide-react
-- **Backend:** Node.js + Express
-- **Baza:** SQLite (dev) ili Postgres (produkcija), preko zajedničkog adaptera u `db/`
-
----
-
-## Lokalno pokretanje (Mac, SQLite)
-
-### Preduvjeti
-- [Node.js](https://nodejs.org) (LTS)
-
-### Instalacija i pokretanje
+Preduvjet: Docker i Docker Compose.
 
 ```bash
+cp .env.example .env    # po potrebi izmijeni vrijednosti (JWT_SECRET obavezno u produkciji!)
+docker compose up --build
+```
+
+- Frontend: http://localhost:3000
+- Backend API: http://localhost:8080/api
+- Postgres: localhost:5432
+
+Prvo pokretanje automatski kreira shemu (Flyway migracije) i uvozi povijesne podatke iz Notiona.
+
+## Arhitektura
+
+```
+habit-tracker/
+├── backend/     Spring Boot 3 (Java 21), Spring Security + JWT, Spring Data JPA, Flyway
+├── frontend/    React 19 + Vite, React Router, Recharts, Axios
+└── docker-compose.yml
+```
+
+### Backend
+
+- `POST /api/auth/register`, `POST /api/auth/login` — JWT autentikacija (bcrypt lozinke)
+- `GET/POST/PUT/DELETE /api/habits` — CRUD za navike (svaki korisnik ima svoje)
+- `GET /api/habits/logs?from=&to=` — matrica unosa za raspon datuma
+- `POST /api/habits/logs/toggle` — označi/odznači naviku za dan
+- `GET /api/stats?from=&to=` — statistika po navici (streak, najdulji niz, stopa uspješnosti) i dnevni napredak
+
+Baza: PostgreSQL, sheme upravljane Flyway migracijama (`backend/src/main/resources/db/migration`).
+
+### Frontend
+
+- `/login`, `/register` — autentikacija
+- `/` — dashboard s checklistom za zadnjih 7 dana
+- `/habits` — dodavanje/uklanjanje/deaktivacija navika
+- `/history` — graf dnevnog napretka + tablica streakova po navici
+- `/profile` — promjena korisničkog imena, emaila i lozinke
+
+## Lokalni razvoj bez Dockera
+
+**Backend:**
+```bash
+cd backend
+# pokreni lokalni Postgres ili prilagodi application.yml
+mvn spring-boot:run
+```
+
+**Frontend:**
+```bash
+cd frontend
 npm install
-npm run dev
+npm run dev   # proxy prema http://localhost:8080 je već konfiguriran u vite.config.js
 ```
 
-Otvori `http://localhost:5173`. Podaci su u `moj-kompic.db` u korijenu projekta.
+## CI/CD (GitHub Actions)
 
-Ako `npm install` zapne na `better-sqlite3`:
-```bash
-xcode-select --install
-npm install
-```
+Workflow: `.github/workflows/ci.yml`
 
----
+- **Na svaki push/PR prema `main`**: builda backend (`mvn clean verify`) i frontend (`npm ci && npm run build`) — hvata greške prije nego ih vidiš lokalno.
+- **Na svaki push na `main`** (nakon što oba builda prođu): gradi Docker images za backend i frontend i pusha ih na GitHub Container Registry:
+  - `ghcr.io/<owner>/<repo>-backend:latest`
+  - `ghcr.io/<owner>/<repo>-frontend:latest`
 
-## Docker / home server (Postgres)
+Ne treba dodatan setup — koristi ugrađeni `GITHUB_TOKEN`, ali repo (Settings → Actions → General → Workflow permissions) treba imati dopušten "Read and write permissions" da bi push na GHCR prošao.
 
-### Pokretanje
+**Deploy korak nije uključen** jer još nemaš server na koji bi se deployalo. Kad odlučiš gdje app hosta (VPS, cloud, itd.), mogu dodati korak koji se preko SSH spaja na server, povlači nove images s GHCR-a i restarta `docker compose` — javi kad budeš spreman/na.
 
-```bash
-docker compose up -d --build
-```
+## Napomena o build provjeri
 
-Ovo pokrene dvije usluge:
-- `db` — Postgres 16, podaci trajno spremljeni u Docker volumenu `kompic_db_data`
-- `app` — build frontenda + backend, na portu `3001`
-
-Aplikacija je dostupna na `http://<adresa-servera>:3001`.
-
-**Prije prve upotrebe u produkciji promijeni lozinku** u `docker-compose.yml` (`POSTGRES_PASSWORD` i odgovarajući dio u `DATABASE_URL`) — vrijednost `change-me` je samo placeholder.
-
-### Gašenje / zaustavljanje
-
-```bash
-docker compose down
-```
-
-Podaci ostaju u volumenu i preživljavaju restart/rebuild. `docker compose down -v` bi obrisao i volumen (podatke) — pazi s tim.
-
----
-
-## CI/CD — automatski build na push
-
-Na svaki push na `main` GitHub Actions (`.github/workflows/docker-publish.yml`) builda Docker image i pusha ga na GitHub Container Registry (GHCR), pod `ghcr.io/simebarisic/moj-kompic:latest` (i tag s kratkim SHA commita). Ne treba dodatna konfiguracija — koristi ugrađeni `GITHUB_TOKEN`.
-
-Build je za `linux/amd64`. Ako je home server ARM (npr. Raspberry Pi), javi pa mijenjamo `platforms` u workflowu.
-
-### Na home serveru: povlačenje gotovog image-a
-
-Za produkciju na serveru koristi `docker-compose.prod.yml` umjesto `docker-compose.yml` — on ne builda lokalno nego povlači gotov image s GHCR-a:
-
-```bash
-docker compose -f docker-compose.prod.yml pull
-docker compose -f docker-compose.prod.yml up -d
-```
-
-Ako je repo privatan, GHCR paket je po defaultu također privatan pa se prvo treba prijaviti na serveru (jednom):
-
-```bash
-echo <GitHub_PAT_s_read:packages_pravom> | docker login ghcr.io -u simebarisic --password-stdin
-```
-
-(PAT napravi na GitHub → Settings → Developer settings → Personal access tokens, scope `read:packages`.) Alternativa: u GitHubu na packages stranici image-a postaviti ga na *public* pa login nije potreban.
-
-Za ručno ažuriranje nakon svakog push-a ponovi `pull` + `up -d` gore. Za automatsko povlačenje najnovijeg tag-a bez ručne intervencije može se dodati [Watchtower](https://containrrr.dev/watchtower/) kao dodatna usluga koja provjerava GHCR i restarta `app` kad izađe novi image — javi ako to želiš pa dodajemo u `docker-compose.prod.yml`.
-
----
-
-## Migracija postojećih podataka (SQLite → Postgres)
-
-Kad prvi put prebaciš app na Docker/Postgres, pokreni migraciju **s Maca**, iz mape projekta gdje ti je postojeća `moj-kompic.db`:
-
-```bash
-export DATABASE_URL=postgres://kompic:change-me@<adresa-servera>:5432/kompic
-npm run migrate:postgres
-```
-
-(Zamijeni lozinku i adresu servera stvarnim vrijednostima; ako Postgres port nije izložen izvana, migraciju možeš pokrenuti i unutar mreže servera, ili privremeno otvoriti port 5432.)
-
-Skripta pročita sve iz SQLite baze i upiše u Postgres — kategorije, sve mjesece, iznose, prihode i rashode. Nakon migracije provjeri u appu da je sve tu prije nego obrišeš staru `.db` datoteku.
-
----
-
-## Podaci i backup
-
-- **SQLite (dev):** `moj-kompic.db` u korijenu projekta — kopiraj tu jednu datoteku za backup.
-- **Postgres (produkcija):** podaci su u Docker volumenu `kompic_db_data`. Backup preko `pg_dump`:
-  ```bash
-  docker compose exec db pg_dump -U kompic kompic > backup.sql
-  ```
-
-Baza (i `.env`) su namjerno u `.gitignore`-u i ne idu na GitHub.
-
-## Struktura projekta
-
-```
-moj-kompic/
-├── server.js               # Express API (/api/state), bira SQLite ili Postgres
-├── db/
-│   ├── sqlite.js            # adapter za lokalni dev
-│   └── postgres.js          # adapter za Docker/produkciju
-├── scripts/
-│   └── migrate-to-postgres.js
-├── src/
-│   ├── App.jsx               # cijela aplikacija (UI, grafovi, logika)
-│   ├── main.jsx
-│   └── index.css
-├── Dockerfile
-├── docker-compose.yml
-├── index.html
-├── vite.config.js
-└── tailwind.config.js
-```
-
-## Napomena o privatnosti
-
-Ovo je osobni alat za praćenje financija — drži repozitorij **privatnim** na GitHubu. Baza i `.env` su izuzeti iz gita, ali kod otkriva strukturu tvog portfelja (nazivi brokera, mirovinskih stupova i sl.).
-
-## Ideje za dalje
-
-- [ ] Izvoz/uvoz podataka (JSON ili CSV)
-- [ ] Godišnji pregledi i usporedba godina
-- [ ] Grafikon FIRE napretka prema cilju umirovljenja
+Frontend (`npm run build`) je uspješno testiran u ovom okruženju. Backend (Maven/Spring Boot) i Docker build nisu mogli biti pokrenuti u ovom sandboxu jer nema pristupa Maven Central repozitoriju niti pokrenutom Docker daemonu — kod je pažljivo ručno pregledan, ali preporučam da prvi `docker compose up --build` pokreneš i provjeriš na svom računalu prije nego ga smatraš gotovim.

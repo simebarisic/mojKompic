@@ -190,12 +190,31 @@ const computeMetalTotals = (metalItems, prices) => {
 // financijska pozicija, nekretnine i sl.) s praćenjem uloženog iznosa,
 // trenutne/prodajne vrijednosti i prinosa. Za razliku od "Plemenitih metala"
 // (koji računa vrijednost iz težine/čistoće i UŽIVO tržišne cijene), ovdje se
-// trenutna/prodajna cijena po jedinici unosi ručno - isto kao u Notion
-// predlošku (Current Price se tamo također ažurira ručno, bez live feeda).
+// trenutna/prodajna cijena po jedinici i dalje može unijeti ručno - isto kao
+// u Notion predlošku - ALI za vrste s tickerom/ID-em (vidi ispod) cijena se
+// automatski dohvaća s burze/CoinGecka preko /api/investment-prices i njome
+// se prepisuje "Trenutna cijena". Nekretnine namjerno ostaju ručne (nema
+// pouzdanog besplatnog izvora za trenutnu tržišnu vrijednost nekretnine).
 const INVESTMENT_TYPES = [
   'Dionica', 'ETF', 'Uzajamni fond', 'Indeksni fond', 'Obveznica',
   'Oročeni depozit', 'Kriptovaluta', 'Zlato', 'Srebro', 'Nekretnina', 'Gotovina', 'Roba/ostalo',
 ];
+
+// Vrste kod kojih se cijena dohvaća preko tickera s burze (Yahoo Finance,
+// neslužbeno, bez API ključa - isti simbol kao na finance.yahoo.com, npr.
+// "AAPL", "VWCE.DE", "3350.T"). Uzajamni/Indeksni fondovi su uključeni jer
+// mnogi (ETF-oidni fondovi) također imaju ticker na burzi - ako ga korisnik
+// ne unese, ostaju kao i dosad na ručnom unosu.
+const AUTO_PRICE_STOCK_TYPES = ['Dionica', 'ETF', 'Uzajamni fond', 'Indeksni fond'];
+// Kriptovalute se dohvaćaju preko CoinGecko ID-a (npr. "bitcoin", "ethereum") -
+// ne preko tickera, jer BTC/ETH nisu jedinstveni ID-jevi na CoinGeckou.
+const AUTO_PRICE_CRYPTO_TYPE = 'Kriptovaluta';
+const isAutoPriceType = (type) => AUTO_PRICE_STOCK_TYPES.includes(type) || type === AUTO_PRICE_CRYPTO_TYPE;
+const autoPriceKind = (type) => {
+  if (type === AUTO_PRICE_CRYPTO_TYPE) return 'crypto';
+  if (AUTO_PRICE_STOCK_TYPES.includes(type)) return 'stock';
+  return null;
+};
 
 // Boja po vrsti ulaganja - grupiramo karticama po ovome u tabu Ulaganja.
 // Gdje isti asset postoji i drugdje u appu (Kriptovaluta/Zlato/Srebro/Nekretnina
@@ -1499,7 +1518,10 @@ function InvestmentForm({ initial, onSave, onCancel, hide }) {
   const [buyPrice, setBuyPrice] = useState(initial?.buyPrice ?? '');
   const [quantity, setQuantity] = useState(initial?.quantity ?? '');
   const [currentPrice, setCurrentPrice] = useState(initial?.currentPrice ?? '');
+  const [apiSymbol, setApiSymbol] = useState(initial?.apiSymbol || '');
   const [notes, setNotes] = useState(initial?.notes || '');
+
+  const autoKind = autoPriceKind(type);
 
   const canSave = label.trim() && buyDate
     && buyPrice !== '' && !Number.isNaN(Number(buyPrice))
@@ -1538,9 +1560,23 @@ function InvestmentForm({ initial, onSave, onCancel, hide }) {
         </div>
         <div>
           <div className="text-xs mb-1" style={{ color: C.textFaint }}>Trenutna cijena (po jedinici, €, opcionalno)</div>
-          <input type="number" step="any" value={currentPrice} onChange={(e) => setCurrentPrice(e.target.value)} placeholder="ažuriraj povremeno ručno"
+          <input type="number" step="any" value={currentPrice} onChange={(e) => setCurrentPrice(e.target.value)}
+            placeholder={autoKind ? 'automatski ako je ticker/ID postavljen, inače ručno' : 'ažuriraj povremeno ručno'}
             className="w-full text-sm rounded-md px-2.5 py-1.5" style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.text, filter: hide ? 'blur(5px)' : 'none' }} />
         </div>
+        {autoKind && (
+          <div className="md:col-span-2">
+            <div className="text-xs mb-1" style={{ color: C.textFaint }}>
+              {autoKind === 'crypto' ? 'CoinGecko ID (opcionalno, za auto cijenu)' : 'Ticker (opcionalno, za auto cijenu)'}
+            </div>
+            <input value={apiSymbol} onChange={(e) => setApiSymbol(e.target.value)}
+              placeholder={autoKind === 'crypto' ? 'npr. bitcoin, ethereum' : 'npr. AAPL, VWCE.DE, 3350.T'}
+              className="w-full text-sm rounded-md px-2.5 py-1.5" style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.text }} />
+            {autoKind === 'stock' && (
+              <div className="text-xs mt-1" style={{ color: C.textFaint }}>Isti simbol kao na finance.yahoo.com - valuta se prepoznaje automatski i pretvara u EUR.</div>
+            )}
+          </div>
+        )}
         <div className="md:col-span-2">
           <div className="text-xs mb-1" style={{ color: C.textFaint }}>Napomena (opcionalno)</div>
           <input value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="npr. broker, razlog ulaganja..."
@@ -1556,6 +1592,7 @@ function InvestmentForm({ initial, onSave, onCancel, hide }) {
             label: label.trim(), type, buyDate,
             buyPrice: Number(buyPrice), quantity: Number(quantity),
             currentPrice: currentPrice === '' ? null : Number(currentPrice),
+            apiSymbol: autoKind && apiSymbol.trim() ? apiSymbol.trim() : null,
             sellDate: initial?.sellDate ?? null, sellPrice: initial?.sellPrice ?? null,
             notes: notes.trim(),
           })}
@@ -1600,6 +1637,7 @@ function InvestmentCard({ inv, onSave, onDelete, onSell, onReopen, hide }) {
             {inv.type} · {inv.quantity} × {mFmt(hide, inv.buyPrice)} · kupljeno {monthLabel(inv.buyDate)}
             {m.sold && <> · prodano {monthLabel(inv.sellDate)} po {mFmt(hide, inv.sellPrice)}</>}
             {!m.sold && <> · {m.months} mj. u portfelju</>}
+            {inv.apiSymbol && isAutoPriceType(inv.type) && <> · <span title="Cijena se automatski dohvaća">auto: {inv.apiSymbol}</span></>}
           </div>
           {inv.notes && <div className="text-xs mt-0.5" style={{ color: C.textFaint, whiteSpace: 'pre-wrap' }}>{inv.notes}</div>}
         </div>
@@ -1693,11 +1731,84 @@ const groupInvestmentsByType = (list) => {
   return [...known, ...unknown];
 };
 
+// Dohvaća trenutne cijene s backenda (/api/investment-prices) za aktivna
+// ulaganja koja imaju postavljen ticker/CoinGecko ID (vidi isAutoPriceType).
+// Isti obrazac kao useMetalPrices - backend kešira izvore ~10 min.
+function useInvestmentPrices() {
+  const [result, setResult] = useState(null); // { prices, errors, fetchedAt }
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  const refresh = async (investments) => {
+    const items = investments
+      .filter((inv) => !isInvestmentSold(inv) && inv.apiSymbol && isAutoPriceType(inv.type))
+      .map((inv) => ({ symbol: inv.apiSymbol, kind: autoPriceKind(inv.type) }));
+    if (items.length === 0) { setResult(null); setError(''); return null; }
+    setLoading(true);
+    try {
+      const res = await fetch('/api/investment-prices', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Dohvat cijena nije uspio.');
+      setResult(data);
+      setError('');
+      return data;
+    } catch (e) {
+      setError(e.message || 'Dohvat cijena nije uspio.');
+      return null;
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return { result, loading, error, refresh };
+}
+
+function InvestmentPricePanel({ loading, error, result, matchedCount, onRefresh }) {
+  if (matchedCount === 0) return null;
+  const errorEntries = Object.entries(result?.errors || {});
+  const updatedLabel = result?.fetchedAt
+    ? new Date(result.fetchedAt).toLocaleString('hr-HR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+    : null;
+
+  return (
+    <Card style={{ padding: '14px 16px' }}>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="text-xs" style={{ color: C.textFaint }}>
+          Automatski dohvat cijene · {matchedCount} {matchedCount === 1 ? 'ulaganje s tickerom/ID-em' : 'ulaganja s tickerom/ID-em'}
+          {updatedLabel && <> · ažurirano {updatedLabel}</>}
+        </div>
+        <button onClick={onRefresh} disabled={loading} className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-md" style={{ color: C.textMuted, border: `1px solid ${C.border}` }}>
+          <RefreshCw size={12} className={loading ? 'animate-spin' : ''} /> {loading ? 'Dohvaćam…' : 'Osvježi cijene'}
+        </button>
+      </div>
+      {error && (
+        <div className="flex items-start gap-2 text-xs px-3 py-2.5 rounded-md mt-2.5" style={{ background: 'rgba(193,106,72,0.12)', color: C.rust, border: `1px solid ${C.rust}55` }}>
+          <AlertTriangle size={14} style={{ flexShrink: 0, marginTop: 1 }} />
+          <span>{error}</span>
+        </div>
+      )}
+      {!error && errorEntries.length > 0 && (
+        <div className="text-xs mt-2 space-y-0.5">
+          {errorEntries.map(([key, msg]) => (
+            <div key={key} style={{ color: C.rust }}>· {key.split(':').slice(1).join(':')}: {msg}</div>
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+}
+
 function Investments({ investments, setInvestments, hide, onToggleHide }) {
   const [adding, setAdding] = useState(false);
+  const { result: priceResult, loading: pricesLoading, error: pricesError, refresh: refreshPrices } = useInvestmentPrices();
 
   const active = investments.filter((i) => !isInvestmentSold(i));
   const past = investments.filter(isInvestmentSold);
+  const autoPriceCount = active.filter((inv) => inv.apiSymbol && isAutoPriceType(inv.type)).length;
 
   const activeSummary = active.reduce((acc, inv) => {
     const m = computeInvestmentMetrics(inv);
@@ -1707,6 +1818,26 @@ function Investments({ investments, setInvestments, hide, onToggleHide }) {
   const activeReturnsPct = activeSummary.invested ? (activeSummary.returns / activeSummary.invested) * 100 : 0;
 
   const realizedReturns = past.reduce((s, inv) => s + computeInvestmentMetrics(inv).returns, 0);
+
+  // Primijeni dohvaćene cijene na ulaganja s postavljenim tickerom/ID-em -
+  // "Trenutna cijena" se prepiše kao da ju je korisnik upisao ručno.
+  const applyFetchedPrices = (data) => {
+    if (!data?.prices) return;
+    setInvestments((prev) => prev.map((inv) => {
+      if (isInvestmentSold(inv) || !inv.apiSymbol || !isAutoPriceType(inv.type)) return inv;
+      const priced = data.prices[`${autoPriceKind(inv.type)}:${inv.apiSymbol}`];
+      return priced ? { ...inv, currentPrice: priced.price } : inv;
+    }));
+  };
+
+  const handleRefreshPrices = async () => {
+    const data = await refreshPrices(investments);
+    if (data) applyFetchedPrices(data);
+  };
+
+  // Automatski dohvat pri otvaranju stranice Ulaganja (isto kao Plemeniti
+  // metali) - komponenta se montira iznova svaki put kad se otvori taj tab.
+  useEffect(() => { handleRefreshPrices(); }, []);
 
   const handleSave = (inv) => {
     setInvestments((prev) => {
@@ -1745,9 +1876,11 @@ function Investments({ investments, setInvestments, hide, onToggleHide }) {
           {past.length > 0 && <div><span style={{ color: C.textFaint }}>Realizirano (prodano): </span><span style={{ color: realizedReturns >= 0 ? C.tealSoft : C.rust, fontVariantNumeric: 'tabular-nums' }}>{mFmtSigned(hide, realizedReturns)}</span></div>}
         </div>
         <div className="text-xs mt-2" style={{ color: C.textFaint }}>
-          "Trenutna cijena" se ažurira ručno po ulaganju (isto kao u tvom Notion dnevniku) — ovo nije automatski dio Neto vrijednosti (Pregled).
+          "Trenutna cijena" se ažurira ručno po ulaganju, ili automatski ako ima postavljen ticker/CoinGecko ID (Dionica, ETF, fondovi, Kriptovaluta) — ovo nije automatski dio Neto vrijednosti (Pregled).
         </div>
       </Card>
+
+      <InvestmentPricePanel loading={pricesLoading} error={pricesError} result={priceResult} matchedCount={autoPriceCount} onRefresh={handleRefreshPrices} />
 
       {!adding && (
         <button onClick={() => setAdding(true)} className="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md" style={{ color: C.bg, background: C.goldSoft }}>
