@@ -3,6 +3,7 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import YahooFinance from 'yahoo-finance2';
+import { GENERATIONAL_WEALTH_SEED } from './db/generational-wealth-seed-data.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Neslužbena Yahoo Finance biblioteka (nema formalnog API ključa, ali povremeno
@@ -15,6 +16,23 @@ const usePostgres = !!process.env.DATABASE_URL;
 const db = usePostgres ? await import('./db/postgres.js') : await import('./db/sqlite.js');
 
 await db.init();
+
+// Auto-sjeme za tab "Generacijsko bogatstvo": ako baza (nova ili postojeća)
+// još nema NIJEDNU stavku u tom tabu, popuni je sadržajem prenesenim s
+// istoimene Notion stranice (vidi db/generational-wealth-seed-data.js).
+// Provjerava se pri svakom pokretanju servera, ali čim postoji barem jedna
+// stavka (iz ovog sjemena ili ručno dodana kroz UI), ovo se više NE pokreće -
+// pa je sigurno da restart servera ne prebriše ono što si ručno uredio/obrisao.
+try {
+  const startupState = await db.getState();
+  if (!startupState.wealthItems || startupState.wealthItems.length === 0) {
+    const seeded = GENERATIONAL_WEALTH_SEED.map((r) => ({ id: Math.random().toString(36).slice(2, 9), ...r }));
+    await db.saveState({ ...startupState, wealthItems: seeded });
+    console.log(`Generacijsko bogatstvo: uvezeno ${seeded.length} početnih stavki iz Notiona (baza je bila prazna za taj tab).`);
+  }
+} catch (e) {
+  console.error('Auto-uvoz "Generacijsko bogatstvo" nije uspio (nastavljam bez njega):', e.message);
+}
 
 const app = express();
 app.use(express.json({ limit: '5mb' }));

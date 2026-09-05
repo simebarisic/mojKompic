@@ -85,6 +85,13 @@ export async function init() {
       notes TEXT,
       sort_order INTEGER NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS wealth_items (
+      id TEXT PRIMARY KEY,
+      category TEXT NOT NULL,
+      item_date TEXT,
+      content TEXT NOT NULL,
+      sort_order INTEGER NOT NULL
+    );
   `);
 }
 
@@ -115,6 +122,10 @@ export async function getState() {
            current_price AS "currentPrice", sell_date AS "sellDate", sell_price AS "sellPrice", notes
     FROM investments ORDER BY sort_order
   `).all();
+  const wealthItems = database.prepare(`
+    SELECT id, category, item_date AS "itemDate", content
+    FROM wealth_items ORDER BY sort_order
+  `).all();
 
   const snapshots = snapshotRows.map((s) => ({
     id: s.id,
@@ -124,13 +135,13 @@ export async function getState() {
     expenses: expenseRows.filter((r) => r.snapshot_id === s.id).map((r) => ({ id: r.id, label: r.label, amount: r.amount })),
   }));
 
-  return { categories, snapshots, consumptionAssets, metalItems, settings, investments };
+  return { categories, snapshots, consumptionAssets, metalItems, settings, investments, wealthItems };
 }
 
-export async function saveState({ categories = [], snapshots = [], consumptionAssets = [], metalItems = [], settings = {}, investments = [] }) {
+export async function saveState({ categories = [], snapshots = [], consumptionAssets = [], metalItems = [], settings = {}, investments = [], wealthItems = [] }) {
   const database = getDb();
   const writeAll = database.transaction(() => {
-    database.exec('DELETE FROM categories; DELETE FROM snapshots; DELETE FROM snapshot_values; DELETE FROM income_items; DELETE FROM expense_items; DELETE FROM consumption_assets; DELETE FROM metal_items; DELETE FROM app_settings; DELETE FROM investments;');
+    database.exec('DELETE FROM categories; DELETE FROM snapshots; DELETE FROM snapshot_values; DELETE FROM income_items; DELETE FROM expense_items; DELETE FROM consumption_assets; DELETE FROM metal_items; DELETE FROM app_settings; DELETE FROM investments; DELETE FROM wealth_items;');
 
     const insCat = database.prepare('INSERT INTO categories (id, label, grp, sort_order) VALUES (?, ?, ?, ?)');
     categories.forEach((c, i) => insCat.run(c.id, c.label, c.group, i));
@@ -189,6 +200,14 @@ export async function saveState({ categories = [], snapshots = [], consumptionAs
       inv.sellDate || null,
       inv.sellPrice === '' || inv.sellPrice === null || inv.sellPrice === undefined ? null : Number(inv.sellPrice),
       inv.notes || '', i
+    ));
+
+    const insWealth = database.prepare(`
+      INSERT INTO wealth_items (id, category, item_date, content, sort_order)
+      VALUES (?, ?, ?, ?, ?)
+    `);
+    wealthItems.forEach((w, i) => insWealth.run(
+      w.id, w.category, w.itemDate || null, w.content || '', i
     ));
   });
 

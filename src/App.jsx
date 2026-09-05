@@ -7,7 +7,7 @@ import {
   Plus, Trash2, TrendingUp, TrendingDown, Wallet, PiggyBank, Home,
   CreditCard, Copy, LayoutGrid, PencilLine, History as HistoryIcon,
   Settings2, Save, ArrowRight, Landmark, PieChart as PieChartIcon, Layers, Car,
-  Eye, EyeOff, Coins, RefreshCw, AlertTriangle, Briefcase, RotateCcw, ChevronDown, ChevronUp
+  Eye, EyeOff, Coins, RefreshCw, AlertTriangle, Briefcase, RotateCcw, ChevronDown, ChevronUp, Gem, GripVertical
 } from 'lucide-react';
 
 /* ---------- design tokens ---------- */
@@ -294,6 +294,32 @@ const MONTHS_HR = ['sij', 'velj', 'ožu', 'tra', 'svi', 'lip', 'srp', 'kol', 'ru
 const MONTHS_HR_FULL = ['Siječanj', 'Veljača', 'Ožujak', 'Travanj', 'Svibanj', 'Lipanj', 'Srpanj', 'Kolovoz', 'Rujan', 'Listopad', 'Studeni', 'Prosinac'];
 
 const uid = () => Math.random().toString(36).slice(2, 9);
+
+// Pretvara jednostavan markdown unutar "Sadržaj" polja (tab "Generacijsko
+// bogatstvo") u prikaz s klikabilnim linkovima - podržava samo [tekst](url)
+// po retku (dovoljno za popis poveznica na proizvode), bez pune markdown
+// biblioteke. Svaki redak unosa postaje zaseban red u prikazu.
+const MARKDOWN_LINK_RE = /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g;
+const renderRichContent = (content) => {
+  const lines = (content || '').split('\n').filter((l) => l.trim() !== '');
+  return lines.map((line, li) => {
+    const parts = [];
+    let lastIndex = 0;
+    let m;
+    MARKDOWN_LINK_RE.lastIndex = 0;
+    while ((m = MARKDOWN_LINK_RE.exec(line))) {
+      if (m.index > lastIndex) parts.push(line.slice(lastIndex, m.index));
+      parts.push(
+        <a key={`${li}-${m.index}`} href={m[2]} target="_blank" rel="noopener noreferrer" style={{ color: C.tealSoft, textDecoration: 'underline' }}>
+          {m[1]}
+        </a>
+      );
+      lastIndex = m.index + m[0].length;
+    }
+    if (lastIndex < line.length) parts.push(line.slice(lastIndex));
+    return <div key={li} style={{ marginBottom: 2 }}>{parts}</div>;
+  });
+};
 const fmt0 = (n) => new Intl.NumberFormat('hr-HR', { maximumFractionDigits: 0 }).format(Math.round(n || 0));
 const fmt = (n) => fmt0(n) + ' €';
 const fmtSigned = (n) => (n >= 0 ? '+' : '') + fmt(n);
@@ -1924,6 +1950,240 @@ function Investments({ investments, setInvestments, hide, onToggleHide }) {
   );
 }
 
+// Tab "Generacijsko bogatstvo": slobodna lista stavki (fizičko zlato, satovi,
+// oprema, ulaganja izvan gornjih tabova...) s poveznicama na konkretne
+// proizvode - preslika istoimene Notion stranice, s time da se ovdje mogu
+// dodavati/uređivati/brisati nove stavke izravno iz aplikacije.
+function WealthItemForm({ initial, onSave, onCancel }) {
+  const [category, setCategory] = useState(initial?.category || '');
+  const [itemDate, setItemDate] = useState(initial?.itemDate || '');
+  const [content, setContent] = useState(initial?.content || '');
+
+  const canSave = category.trim() && content.trim();
+
+  return (
+    <Card style={{ padding: '18px 20px' }}>
+      <div className="text-sm font-semibold mb-3" style={{ color: C.text }}>{initial ? 'Uredi stavku' : 'Nova stavka'}</div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
+        <div>
+          <div className="text-xs mb-1" style={{ color: C.textFaint }}>Kategorija</div>
+          <input value={category} onChange={(e) => setCategory(e.target.value)} placeholder="npr. 🪙 1 unca zlatnici"
+            className="w-full text-sm rounded-md px-2.5 py-1.5" style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.text }} />
+        </div>
+        <div>
+          <div className="text-xs mb-1" style={{ color: C.textFaint }}>Datum (opcionalno)</div>
+          <input value={itemDate} onChange={(e) => setItemDate(e.target.value)} placeholder="npr. 1.3.2026."
+            className="w-full text-sm rounded-md px-2.5 py-1.5" style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.text }} />
+        </div>
+      </div>
+      <div className="mb-3">
+        <div className="text-xs mb-1" style={{ color: C.textFaint }}>Sadržaj — jedan redak po stavci; link kao [tekst](url)</div>
+        <textarea
+          value={content} onChange={(e) => setContent(e.target.value)} rows={6}
+          placeholder={'[Naziv proizvoda](https://...)\nDrugi redak...'}
+          className="w-full text-sm rounded-md px-2.5 py-1.5"
+          style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.text, fontFamily: 'ui-monospace, monospace', resize: 'vertical' }}
+        />
+      </div>
+      <div className="flex items-center justify-end gap-2">
+        <button onClick={onCancel} className="text-sm px-3.5 py-1.5 rounded-md" style={{ color: C.textMuted, border: `1px solid ${C.border}` }}>Odustani</button>
+        <button
+          disabled={!canSave}
+          onClick={() => onSave({ id: initial?.id || uid(), category: category.trim(), itemDate: itemDate.trim(), content: content.trim() })}
+          className="text-sm px-4 py-1.5 rounded-md font-semibold"
+          style={{ background: canSave ? C.goldSoft : C.borderSoft, color: canSave ? C.bg : C.textFaint, cursor: canSave ? 'pointer' : 'not-allowed' }}
+        >
+          Spremi
+        </button>
+      </div>
+    </Card>
+  );
+}
+
+// Lista pojedinačnih redaka "Sadržaja" (svaki link ili obični redak - zaseban
+// unos) koju se može premještati drag&dropom (nativni HTML5 DnD, bez
+// dodatne biblioteke - drži hvataljku pa povuci gore/dolje), uređivati
+// pojedinačno (olovčica) ili ukloniti (kanta), plus dodavanje novog retka na
+// dnu. Content se i dalje sprema kao jedan string s \n između redaka (isti
+// format kao dosad, bez promjene baze) - ovo je samo interaktivan prikaz/urednik
+// nad tim stringom.
+function WealthContentEditor({ content, onChange }) {
+  const lines = (content || '').split('\n').filter((l) => l.trim() !== '');
+  const [editingIndex, setEditingIndex] = useState(null);
+  const [draft, setDraft] = useState('');
+  const [dragIndex, setDragIndex] = useState(null);
+  const [overIndex, setOverIndex] = useState(null);
+  const [addingNew, setAddingNew] = useState(false);
+  const [newDraft, setNewDraft] = useState('');
+
+  const commitLines = (nextLines) => onChange(nextLines.map((l) => l.trim()).filter(Boolean).join('\n'));
+
+  const handleDrop = (targetIndex) => {
+    if (dragIndex === null || dragIndex === targetIndex) { setDragIndex(null); setOverIndex(null); return; }
+    const next = [...lines];
+    const [moved] = next.splice(dragIndex, 1);
+    next.splice(targetIndex, 0, moved);
+    commitLines(next);
+    setDragIndex(null);
+    setOverIndex(null);
+  };
+
+  const startEdit = (i) => { setEditingIndex(i); setDraft(lines[i]); };
+  const saveEdit = (i) => {
+    const next = [...lines];
+    if (draft.trim()) next[i] = draft.trim(); else next.splice(i, 1);
+    commitLines(next);
+    setEditingIndex(null);
+  };
+  const removeLine = (i) => commitLines(lines.filter((_, idx) => idx !== i));
+
+  const addLine = () => {
+    if (!newDraft.trim()) { setAddingNew(false); setNewDraft(''); return; }
+    commitLines([...lines, newDraft.trim()]);
+    setNewDraft('');
+    setAddingNew(false);
+  };
+
+  return (
+    <div className="space-y-1 mt-1.5">
+      {lines.map((line, i) => (
+        <div
+          key={i}
+          draggable={editingIndex !== i}
+          onDragStart={() => setDragIndex(i)}
+          onDragOver={(e) => { e.preventDefault(); if (overIndex !== i) setOverIndex(i); }}
+          onDragEnd={() => { setDragIndex(null); setOverIndex(null); }}
+          onDrop={() => handleDrop(i)}
+          className="flex items-center gap-2 rounded-md px-1.5 py-1"
+          style={{
+            background: overIndex === i && dragIndex !== null && dragIndex !== i ? 'rgba(231,197,101,0.10)' : 'transparent',
+            border: `1px solid ${overIndex === i && dragIndex !== null && dragIndex !== i ? C.goldSoft + '55' : 'transparent'}`,
+            opacity: dragIndex === i ? 0.4 : 1,
+          }}
+        >
+          <span style={{ cursor: editingIndex === i ? 'default' : 'grab', color: C.textFaint, flexShrink: 0, touchAction: 'none' }}>
+            <GripVertical size={13} />
+          </span>
+          {editingIndex === i ? (
+            <>
+              <input
+                autoFocus value={draft} onChange={(e) => setDraft(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') saveEdit(i); if (e.key === 'Escape') setEditingIndex(null); }}
+                placeholder="[Naziv](https://...) ili obični tekst"
+                className="flex-1 text-sm rounded-md px-2 py-1 min-w-0"
+                style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.text, fontFamily: 'ui-monospace, monospace' }}
+              />
+              <button onClick={() => saveEdit(i)} className="text-xs px-2 py-1 rounded-md font-semibold shrink-0" style={{ background: C.goldSoft, color: C.bg }}>Spremi</button>
+              <button onClick={() => setEditingIndex(null)} className="text-xs shrink-0" style={{ color: C.textFaint }}>Odustani</button>
+            </>
+          ) : (
+            <>
+              <div className="flex-1 text-sm min-w-0" style={{ color: C.textMuted, lineHeight: 1.5 }}>{renderRichContent(line)}</div>
+              <button onClick={() => startEdit(i)} className="shrink-0" style={{ color: C.textFaint }} title="Uredi redak"><PencilLine size={13} /></button>
+              <button onClick={() => removeLine(i)} className="shrink-0" style={{ color: C.textFaint }} title="Ukloni redak"><Trash2 size={13} /></button>
+            </>
+          )}
+        </div>
+      ))}
+
+      {addingNew ? (
+        <div className="flex items-center gap-2 px-1.5 py-1">
+          <GripVertical size={13} style={{ color: 'transparent', flexShrink: 0 }} />
+          <input
+            autoFocus value={newDraft} onChange={(e) => setNewDraft(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') addLine(); if (e.key === 'Escape') { setAddingNew(false); setNewDraft(''); } }}
+            placeholder="[Naziv](https://...) ili obični tekst"
+            className="flex-1 text-sm rounded-md px-2 py-1 min-w-0"
+            style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.text, fontFamily: 'ui-monospace, monospace' }}
+          />
+          <button onClick={addLine} className="text-xs px-2 py-1 rounded-md font-semibold shrink-0" style={{ background: C.goldSoft, color: C.bg }}>Dodaj</button>
+          <button onClick={() => { setAddingNew(false); setNewDraft(''); }} className="text-xs shrink-0" style={{ color: C.textFaint }}>Odustani</button>
+        </div>
+      ) : (
+        <button onClick={() => setAddingNew(true)} className="inline-flex items-center gap-1 text-xs mt-1" style={{ color: C.tealSoft }}>
+          <Plus size={12} /> Dodaj redak
+        </button>
+      )}
+    </div>
+  );
+}
+
+function WealthItemRow({ item, onEdit, onDelete, onUpdateContent }) {
+  return (
+    <Card style={{ padding: '14px 18px' }}>
+      <div className="flex items-start justify-between gap-3">
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div className="flex items-baseline gap-2 flex-wrap">
+            <div className="text-sm font-semibold" style={{ color: C.text }}>{item.category}</div>
+            {item.itemDate && <div className="text-xs" style={{ color: C.textFaint }}>{item.itemDate}</div>}
+          </div>
+          <WealthContentEditor content={item.content} onChange={(content) => onUpdateContent(item.id, content)} />
+        </div>
+        <div className="flex items-center gap-3 shrink-0">
+          <button onClick={() => onEdit(item)} className="text-xs" style={{ color: C.textMuted }}>Uredi</button>
+          <button onClick={() => onDelete(item.id)} className="text-xs" style={{ color: C.textFaint }}>Obriši</button>
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+function GenerationalWealth({ wealthItems, setWealthItems }) {
+  const [adding, setAdding] = useState(false);
+  const [editingId, setEditingId] = useState(null);
+  const editingItem = editingId ? wealthItems.find((w) => w.id === editingId) : null;
+
+  const handleSave = (item) => {
+    setWealthItems((prev) => {
+      const exists = prev.some((w) => w.id === item.id);
+      return exists ? prev.map((w) => (w.id === item.id ? item : w)) : [...prev, item];
+    });
+    setAdding(false);
+    setEditingId(null);
+  };
+
+  const handleDelete = (id) => {
+    const item = wealthItems.find((w) => w.id === id);
+    const ok = window.confirm(`Obrisati stavku "${item?.category}"? Ova radnja se ne može poništiti.`);
+    if (ok) setWealthItems((prev) => prev.filter((w) => w.id !== id));
+  };
+
+  const handleUpdateContent = (id, content) => {
+    setWealthItems((prev) => prev.map((w) => (w.id === id ? { ...w, content } : w)));
+  };
+
+  return (
+    <div className="space-y-4">
+      <Card style={{ padding: '20px 24px' }}>
+        <div className="text-xs uppercase tracking-wide" style={{ color: C.textFaint, letterSpacing: '0.08em' }}>Generacijsko bogatstvo</div>
+        <div className="text-sm mt-1.5" style={{ color: C.textMuted }}>
+          Popis fizičke imovine, opreme i ulaganja za dugoročno/generacijsko bogatstvo, s poveznicama na konkretne proizvode — preslika Notion stranice istog imena. Dodaj nove stavke po potrebi, a pojedinačne retke unutar stavke povuci za hvataljku da im promijeniš redoslijed.
+        </div>
+      </Card>
+
+      {!adding && !editingId && (
+        <button onClick={() => setAdding(true)} className="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md" style={{ color: C.bg, background: C.goldSoft }}>
+          <Plus size={13} /> Dodaj stavku
+        </button>
+      )}
+      {adding && <WealthItemForm onSave={handleSave} onCancel={() => setAdding(false)} />}
+      {editingItem && <WealthItemForm initial={editingItem} onSave={handleSave} onCancel={() => setEditingId(null)} />}
+
+      <div className="space-y-3">
+        {wealthItems.map((item) => (
+          <WealthItemRow key={item.id} item={item} onEdit={(x) => setEditingId(x.id)} onDelete={handleDelete} onUpdateContent={handleUpdateContent} />
+        ))}
+      </div>
+
+      {wealthItems.length === 0 && !adding && (
+        <Card style={{ padding: '32px', textAlign: 'center' }}>
+          <p className="text-sm" style={{ color: C.textMuted }}>Nema unesenih stavki. Dodaj prvu — npr. zlatnik, sat ili ulaganje s poveznicom na proizvod.</p>
+        </Card>
+      )}
+    </div>
+  );
+}
+
 function MonthPickerModal({ existingMonths, onConfirm, onCancel }) {
   const now = new Date();
   const [y, setY] = useState(now.getFullYear());
@@ -1977,6 +2237,7 @@ export default function App() {
   const [consumptionAssets, setConsumptionAssets] = useState([]);
   const [metalItems, setMetalItems] = useState([]);
   const [investments, setInvestments] = useState([]);
+  const [wealthItems, setWealthItems] = useState([]);
   const [settings, setSettings] = useState({});
   const priceOverrides = { goldEurPerGram: settings.goldEurPerGram ?? '', silverEurPerGram: settings.silverEurPerGram ?? '' };
   const setPriceOverrides = (next) => setSettings((prev) => ({ ...prev, goldEurPerGram: next.goldEurPerGram, silverEurPerGram: next.silverEurPerGram }));
@@ -2023,6 +2284,7 @@ export default function App() {
         if (parsed.metalItems) setMetalItems(parsed.metalItems);
         if (parsed.settings) setSettings(parsed.settings);
         if (parsed.investments) setInvestments(parsed.investments);
+        if (parsed.wealthItems) setWealthItems(parsed.wealthItems);
         setLoaded(true);
       } catch (e) {
         if (cancelled) return;
@@ -2050,7 +2312,7 @@ export default function App() {
             // ovdje je uvijek namjerno (korisnik je stvarno obrisao sve).
             'X-Confirm-Wipe': snapshots.length === 0 ? 'true' : 'false',
           },
-          body: JSON.stringify({ categories, snapshots, consumptionAssets, metalItems, settings, investments }),
+          body: JSON.stringify({ categories, snapshots, consumptionAssets, metalItems, settings, investments, wealthItems }),
         });
         if (!res.ok) throw new Error('save failed');
       } catch (e) {
@@ -2058,7 +2320,7 @@ export default function App() {
         setTimeout(() => setNotice(''), 4500);
       }
     })();
-  }, [categories, snapshots, consumptionAssets, metalItems, settings, investments, loaded]);
+  }, [categories, snapshots, consumptionAssets, metalItems, settings, investments, wealthItems, loaded]);
 
   const sorted = useMemo(() => [...snapshots].sort((a, b) => a.month.localeCompare(b.month)), [snapshots]);
 
@@ -2153,6 +2415,7 @@ export default function App() {
             <TabButton id="potrosnaImovina" label="Potrošna imovina" icon={Car} activeTab={tab} onSelect={setTab} />
             <TabButton id="plemenitiMetali" label="Plemeniti metali" icon={Coins} activeTab={tab} onSelect={setTab} />
             <TabButton id="ulaganja" label="Ulaganja" icon={Briefcase} activeTab={tab} onSelect={setTab} />
+            <TabButton id="generacijskoBogatstvo" label="Generacijsko bogatstvo" icon={Gem} activeTab={tab} onSelect={setTab} />
           </div>
         </div>
 
@@ -2225,6 +2488,9 @@ export default function App() {
             investments={investments} setInvestments={setInvestments}
             hide={pagePrivacy.ulaganja} onToggleHide={() => togglePagePrivacy('ulaganja')}
           />
+        )}
+        {tab === 'generacijskoBogatstvo' && (
+          <GenerationalWealth wealthItems={wealthItems} setWealthItems={setWealthItems} />
         )}
       </div>
     </div>

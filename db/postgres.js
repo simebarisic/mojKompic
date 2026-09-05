@@ -82,6 +82,13 @@ export async function init() {
       notes TEXT,
       sort_order INTEGER NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS wealth_items (
+      id TEXT PRIMARY KEY,
+      category TEXT NOT NULL,
+      item_date TEXT,
+      content TEXT NOT NULL,
+      sort_order INTEGER NOT NULL
+    );
   `);
 }
 
@@ -108,6 +115,10 @@ export async function getState() {
     SELECT id, label, type, buy_date AS "buyDate", buy_price AS "buyPrice", quantity,
            current_price AS "currentPrice", sell_date AS "sellDate", sell_price AS "sellPrice", notes
     FROM investments ORDER BY sort_order
+  `);
+  const { rows: wealthRows } = await p.query(`
+    SELECT id, category, item_date AS "itemDate", content
+    FROM wealth_items ORDER BY sort_order
   `);
 
   const snapshots = snapshotRows.map((s) => ({
@@ -145,10 +156,12 @@ export async function getState() {
     sellPrice: inv.sellPrice === null ? null : Number(inv.sellPrice),
   }));
 
-  return { categories, snapshots, consumptionAssets, metalItems, settings, investments };
+  const wealthItems = wealthRows;
+
+  return { categories, snapshots, consumptionAssets, metalItems, settings, investments, wealthItems };
 }
 
-export async function saveState({ categories = [], snapshots = [], consumptionAssets = [], metalItems = [], settings = {}, investments = [] }) {
+export async function saveState({ categories = [], snapshots = [], consumptionAssets = [], metalItems = [], settings = {}, investments = [], wealthItems = [] }) {
   const p = getPool();
   const client = await p.connect();
   try {
@@ -162,6 +175,7 @@ export async function saveState({ categories = [], snapshots = [], consumptionAs
     await client.query('DELETE FROM metal_items');
     await client.query('DELETE FROM app_settings');
     await client.query('DELETE FROM investments');
+    await client.query('DELETE FROM wealth_items');
 
     for (let i = 0; i < categories.length; i++) {
       const c = categories[i];
@@ -225,6 +239,13 @@ export async function saveState({ categories = [], snapshots = [], consumptionAs
           inv.sellPrice === '' || inv.sellPrice === null || inv.sellPrice === undefined ? null : Number(inv.sellPrice),
           inv.notes || '', i,
         ]
+      );
+    }
+    for (let i = 0; i < wealthItems.length; i++) {
+      const w = wealthItems[i];
+      await client.query(
+        'INSERT INTO wealth_items (id, category, item_date, content, sort_order) VALUES ($1,$2,$3,$4,$5)',
+        [w.id, w.category, w.itemDate || null, w.content || '', i]
       );
     }
     await client.query('COMMIT');
