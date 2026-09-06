@@ -92,6 +92,20 @@ export async function init() {
       content TEXT NOT NULL,
       sort_order INTEGER NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS fi_scenarios (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      current_age REAL NOT NULL,
+      investing_years REAL NOT NULL,
+      payout_years REAL NOT NULL,
+      expected_return_pct REAL NOT NULL,
+      current_capital REAL NOT NULL,
+      monthly_contribution REAL NOT NULL,
+      contribution_growth_pct REAL NOT NULL DEFAULT 0,
+      fee_pct REAL NOT NULL DEFAULT 0,
+      expected_pension REAL NOT NULL DEFAULT 0,
+      sort_order INTEGER NOT NULL
+    );
   `);
 }
 
@@ -126,6 +140,14 @@ export async function getState() {
     SELECT id, category, item_date AS "itemDate", content
     FROM wealth_items ORDER BY sort_order
   `).all();
+  const fiScenarios = database.prepare(`
+    SELECT id, name, current_age AS "currentAge", investing_years AS "investingYears",
+           payout_years AS "payoutYears", expected_return_pct AS "expectedReturnPct",
+           current_capital AS "currentCapital", monthly_contribution AS "monthlyContribution",
+           contribution_growth_pct AS "contributionGrowthPct", fee_pct AS "feePct",
+           expected_pension AS "expectedPension"
+    FROM fi_scenarios ORDER BY sort_order
+  `).all();
 
   const snapshots = snapshotRows.map((s) => ({
     id: s.id,
@@ -135,13 +157,13 @@ export async function getState() {
     expenses: expenseRows.filter((r) => r.snapshot_id === s.id).map((r) => ({ id: r.id, label: r.label, amount: r.amount })),
   }));
 
-  return { categories, snapshots, consumptionAssets, metalItems, settings, investments, wealthItems };
+  return { categories, snapshots, consumptionAssets, metalItems, settings, investments, wealthItems, fiScenarios };
 }
 
-export async function saveState({ categories = [], snapshots = [], consumptionAssets = [], metalItems = [], settings = {}, investments = [], wealthItems = [] }) {
+export async function saveState({ categories = [], snapshots = [], consumptionAssets = [], metalItems = [], settings = {}, investments = [], wealthItems = [], fiScenarios = [] }) {
   const database = getDb();
   const writeAll = database.transaction(() => {
-    database.exec('DELETE FROM categories; DELETE FROM snapshots; DELETE FROM snapshot_values; DELETE FROM income_items; DELETE FROM expense_items; DELETE FROM consumption_assets; DELETE FROM metal_items; DELETE FROM app_settings; DELETE FROM investments; DELETE FROM wealth_items;');
+    database.exec('DELETE FROM categories; DELETE FROM snapshots; DELETE FROM snapshot_values; DELETE FROM income_items; DELETE FROM expense_items; DELETE FROM consumption_assets; DELETE FROM metal_items; DELETE FROM app_settings; DELETE FROM investments; DELETE FROM wealth_items; DELETE FROM fi_scenarios;');
 
     const insCat = database.prepare('INSERT INTO categories (id, label, grp, sort_order) VALUES (?, ?, ?, ?)');
     categories.forEach((c, i) => insCat.run(c.id, c.label, c.group, i));
@@ -208,6 +230,18 @@ export async function saveState({ categories = [], snapshots = [], consumptionAs
     `);
     wealthItems.forEach((w, i) => insWealth.run(
       w.id, w.category, w.itemDate || null, w.content || '', i
+    ));
+
+    const insFi = database.prepare(`
+      INSERT INTO fi_scenarios
+        (id, name, current_age, investing_years, payout_years, expected_return_pct,
+         current_capital, monthly_contribution, contribution_growth_pct, fee_pct, expected_pension, sort_order)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    fiScenarios.forEach((f, i) => insFi.run(
+      f.id, f.name || 'Scenarij', Number(f.currentAge) || 0, Number(f.investingYears) || 0, Number(f.payoutYears) || 0,
+      Number(f.expectedReturnPct) || 0, Number(f.currentCapital) || 0, Number(f.monthlyContribution) || 0,
+      Number(f.contributionGrowthPct) || 0, Number(f.feePct) || 0, Number(f.expectedPension) || 0, i
     ));
   });
 

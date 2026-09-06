@@ -7,7 +7,8 @@ import {
   Plus, Trash2, TrendingUp, TrendingDown, Wallet, PiggyBank, Home,
   CreditCard, Copy, LayoutGrid, PencilLine, History as HistoryIcon,
   Settings2, Save, ArrowRight, Landmark, PieChart as PieChartIcon, Layers, Car,
-  Eye, EyeOff, Coins, RefreshCw, AlertTriangle, Briefcase, RotateCcw, ChevronDown, ChevronUp, Gem, GripVertical
+  Eye, EyeOff, Coins, RefreshCw, AlertTriangle, Briefcase, RotateCcw, ChevronDown, ChevronUp, Gem, GripVertical, Target,
+  Menu, X
 } from 'lucide-react';
 
 /* ---------- design tokens ---------- */
@@ -273,6 +274,75 @@ const computeConsumptionValue = (asset, asOf = new Date()) => {
   return { currentValue: Math.max(0, currentValue), monthsSinceBase: months, baseDate, baseValue };
 };
 
+// Financijska neovisnost (FI/FIRE) - spaja dvije vanjske Excel tablice u jedan
+// model: akumulacija po mjesecima (pravo mjesečno ukamaćivanje, standardna
+// financijska formula - isto što Excelov FV/PMT rade "u jednom koraku") uz
+// mjesečne uplate koje rastu contributionGrowthPct godišnje i naknadu banke
+// (iz "Financial Freedom Calculator"); isplata (iz "Kalkulator financijske
+// neovisnosti") - kapital na prekretnici se anuitetno isplaćuje kroz
+// payoutYears uz isti prinos, do potpune potrošnje glavnice, plus se dodaje
+// očekivana državna mirovina.
+// NAPOMENA: "Financial Freedom Calculator" interno koristi pojednostavljenu
+// GODIŠNJU aproksimaciju (profit = stopa * (početno stanje + uplate/2)), koja
+// za dulje periode/veće stope odstupa od stvarnog mjesečnog ukamaćivanja (npr.
+// ~8% razlike kod 35 g./9%). Ovdje se namjerno koristi točno mjesečno
+// ukamaćivanje - to je isti model koji "Kalkulator financijske neovisnosti"
+// koristi (FV/PMT), pa se njegove brojke poklapaju točno, a rezultat je
+// financijski precizniji za stvarno planiranje.
+// "Vječna renta" je dodatni uvid koji nijedna od dvije tablice sama ne daje:
+// mjesečni iznos koji bi se mogao trošiti zauvijek bez diranja glavnice.
+const computeFiScenario = (scenario) => {
+  const currentCapital = Number(scenario.currentCapital) || 0;
+  const monthlyContribution = Number(scenario.monthlyContribution) || 0;
+  const contributionGrowthPct = Number(scenario.contributionGrowthPct) || 0;
+  const expectedReturnPct = Number(scenario.expectedReturnPct) || 0;
+  const feePct = Number(scenario.feePct) || 0;
+  const investingYears = Math.max(0, Math.round(Number(scenario.investingYears) || 0));
+  const payoutYears = Math.max(0, Math.round(Number(scenario.payoutYears) || 0));
+  const expectedPension = Number(scenario.expectedPension) || 0;
+  const currentAge = Number(scenario.currentAge) || 0;
+
+  const netRate = expectedReturnPct - feePct;
+  const monthlyRate = netRate / 12;
+  const years = [];
+  let balance = currentCapital;
+  for (let year = 1; year <= investingYears; year++) {
+    const startingBalance = balance;
+    const yearlyMonthlyContribution = monthlyContribution * Math.pow(1 + contributionGrowthPct, year - 1);
+    let contributions = 0;
+    for (let m = 0; m < 12; m++) {
+      balance = balance * (1 + monthlyRate) + yearlyMonthlyContribution;
+      contributions += yearlyMonthlyContribution;
+    }
+    const finalBalance = balance;
+    const profit = finalBalance - startingBalance - contributions;
+    years.push({ year, startingBalance, contributions, profit, finalBalance });
+  }
+
+  const capitalAtRetirement = years.length ? years[years.length - 1].finalBalance : currentCapital;
+  const totalContributions = years.reduce((s, y) => s + y.contributions, 0);
+  const totalInvested = totalContributions + currentCapital;
+  const totalProfit = capitalAtRetirement - totalInvested;
+
+  const i = netRate / 12;
+  const n = payoutYears * 12;
+  const monthlyPayout = n === 0 ? 0 : (i === 0 ? capitalAtRetirement / n : (capitalAtRetirement * i) / (1 - Math.pow(1 + i, -n)));
+  const monthlyIncomeWithPension = monthlyPayout + expectedPension;
+  const perpetualMonthlyWithdrawal = (capitalAtRetirement * netRate) / 12;
+
+  const todayYear = new Date().getFullYear();
+  const milestoneYear = todayYear + investingYears;
+  const endYear = milestoneYear + payoutYears;
+  const milestoneAge = currentAge + investingYears;
+  const endAge = milestoneAge + payoutYears;
+
+  return {
+    years, capitalAtRetirement, totalContributions, totalInvested, totalProfit,
+    monthlyPayout, monthlyIncomeWithPension, perpetualMonthlyWithdrawal,
+    todayYear, milestoneYear, endYear, milestoneAge, endAge,
+  };
+};
+
 const DEFAULT_CATEGORIES = [
   { id: 'tekuci', label: 'Tekući (OTP)', group: 'liquid' },
   { id: 'revolut', label: 'Revolut (dionice)', group: 'liquid' },
@@ -368,19 +438,83 @@ function Card({ children, style, className = '' }) {
   );
 }
 
-function TabButton({ id, label, icon: Icon, activeTab, onSelect }) {
+// Bočni izbornik - tabovi grupirani u logičke cjeline (umjesto jednog dugog
+// vodoravnog reda) jer ih je s vremenom nakupilo previše da bi vodoravno lijepo
+// stajali. "Planiranje" je namjerno zadnja sekcija (dolazi kasnije, orijentirano
+// na budućnost, za razliku od ostalih koji prate trenutno/prošlo stanje).
+const NAV_SECTIONS = [
+  {
+    label: 'Pregled', items: [
+      { id: 'pregled', label: 'Pregled', icon: LayoutGrid },
+      { id: 'unos', label: 'Unos', icon: PencilLine },
+      { id: 'povijest', label: 'Povijest', icon: HistoryIcon },
+      { id: 'kategorije', label: 'Kategorije', icon: Settings2 },
+    ],
+  },
+  {
+    label: 'Imovina', items: [
+      { id: 'diverzifikacija', label: 'Diverzifikacija', icon: PieChartIcon },
+      { id: 'vrstaImovine', label: 'Vrsta imovine', icon: Layers },
+      { id: 'potrosnaImovina', label: 'Potrošna imovina', icon: Car },
+      { id: 'plemenitiMetali', label: 'Plemeniti metali', icon: Coins },
+      { id: 'ulaganja', label: 'Ulaganja', icon: Briefcase },
+      { id: 'generacijskoBogatstvo', label: 'Generacijsko bogatstvo', icon: Gem },
+    ],
+  },
+  {
+    label: 'Planiranje', items: [
+      { id: 'financijskaNeovisnost', label: 'Financijska neovisnost', icon: Target },
+    ],
+  },
+];
+
+function SidebarNavItem({ id, label, icon: Icon, activeTab, onSelect }) {
+  const active = activeTab === id;
   return (
     <button
       onClick={() => onSelect(id)}
-      className="flex items-center gap-2 px-3.5 py-2 text-sm rounded-md transition-colors"
+      className="w-full flex items-center gap-2.5 px-3 py-2 text-sm rounded-md transition-colors text-left"
       style={{
-        color: activeTab === id ? C.bg : C.textMuted,
-        background: activeTab === id ? C.goldSoft : 'transparent',
-        fontWeight: activeTab === id ? 600 : 500,
+        color: active ? C.bg : C.textMuted,
+        background: active ? C.goldSoft : 'transparent',
+        fontWeight: active ? 600 : 500,
       }}
     >
-      <Icon size={15} /> {label}
+      <Icon size={15} style={{ flexShrink: 0 }} /> <span className="truncate">{label}</span>
     </button>
+  );
+}
+
+function SidebarContent({ tab, onSelect, allPrivacyOn, onToggleAllPrivacy, onClose }) {
+  return (
+    <div className="flex flex-col h-full" style={{ padding: '18px 12px' }}>
+      <div className="flex items-start justify-between px-1.5">
+        <div>
+          <div style={{ fontFamily: 'Georgia, "Iowan Old Style", serif', fontSize: 21, letterSpacing: '0.01em' }}>Moj Kompić</div>
+          <div className="text-xs mt-0.5" style={{ color: C.textFaint }}>Osobna knjiga imovine</div>
+        </div>
+        {onClose && (
+          <button onClick={onClose} style={{ color: C.textMuted }}><X size={18} /></button>
+        )}
+      </div>
+      <div className="mt-3 px-1.5">
+        <PrivacyButton on={allPrivacyOn} onToggle={onToggleAllPrivacy} label="sve iznose u aplikaciji" size="md" />
+      </div>
+      <nav className="mt-1 flex-1 overflow-y-auto">
+        {NAV_SECTIONS.map((section) => (
+          <div key={section.label}>
+            <div className="px-2.5 pt-4 pb-1.5 text-xs font-semibold" style={{ color: C.textFaint, letterSpacing: '0.08em', textTransform: 'uppercase' }}>
+              {section.label}
+            </div>
+            <div className="space-y-0.5">
+              {section.items.map((item) => (
+                <SidebarNavItem key={item.id} id={item.id} label={item.label} icon={item.icon} activeTab={tab} onSelect={onSelect} />
+              ))}
+            </div>
+          </div>
+        ))}
+      </nav>
+    </div>
   );
 }
 
@@ -2184,6 +2318,226 @@ function GenerationalWealth({ wealthItems, setWealthItems }) {
   );
 }
 
+function FiScenarioForm({ initial, onSave, onCancel }) {
+  const [name, setName] = useState(initial?.name || 'Moj plan');
+  const [currentAge, setCurrentAge] = useState(initial?.currentAge ?? '');
+  const [investingYears, setInvestingYears] = useState(initial?.investingYears ?? '');
+  const [payoutYears, setPayoutYears] = useState(initial?.payoutYears ?? '');
+  const [expectedReturnPct, setExpectedReturnPct] = useState(initial ? initial.expectedReturnPct * 100 : '');
+  const [currentCapital, setCurrentCapital] = useState(initial?.currentCapital ?? '');
+  const [monthlyContribution, setMonthlyContribution] = useState(initial?.monthlyContribution ?? '');
+  const [contributionGrowthPct, setContributionGrowthPct] = useState(initial ? initial.contributionGrowthPct * 100 : 0);
+  const [feePct, setFeePct] = useState(initial ? initial.feePct * 100 : 0);
+  const [expectedPension, setExpectedPension] = useState(initial?.expectedPension ?? 0);
+
+  const canSave = name.trim() !== '' && currentAge !== '' && investingYears !== '' && payoutYears !== ''
+    && expectedReturnPct !== '' && currentCapital !== '' && monthlyContribution !== '';
+
+  const field = (label, value, setValue, placeholder) => (
+    <div>
+      <div className="text-xs mb-1" style={{ color: C.textFaint }}>{label}</div>
+      <input
+        type="number" step="any" value={value} placeholder={placeholder}
+        onChange={(e) => setValue(e.target.value)}
+        className="w-full text-sm rounded-md px-2.5 py-1.5"
+        style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.text }}
+      />
+    </div>
+  );
+
+  const handleSave = () => {
+    onSave({
+      id: initial?.id || uid(),
+      name: name.trim(),
+      currentAge: Number(currentAge) || 0,
+      investingYears: Number(investingYears) || 0,
+      payoutYears: Number(payoutYears) || 0,
+      expectedReturnPct: (Number(expectedReturnPct) || 0) / 100,
+      currentCapital: Number(currentCapital) || 0,
+      monthlyContribution: Number(monthlyContribution) || 0,
+      contributionGrowthPct: (Number(contributionGrowthPct) || 0) / 100,
+      feePct: (Number(feePct) || 0) / 100,
+      expectedPension: Number(expectedPension) || 0,
+    });
+  };
+
+  return (
+    <Card style={{ padding: '18px 20px' }}>
+      <div className="text-sm font-semibold mb-3" style={{ color: C.text }}>{initial ? 'Uredi scenarij' : 'Novi scenarij'}</div>
+      <div className="mb-3">
+        <div className="text-xs mb-1" style={{ color: C.textFaint }}>Naziv scenarija</div>
+        <input
+          value={name} onChange={(e) => setName(e.target.value)} placeholder="npr. Moj plan"
+          className="w-full text-sm rounded-md px-2.5 py-1.5" style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.text }}
+        />
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
+        {field('Trenutna dob', currentAge, setCurrentAge)}
+        {field('Period investiranja (god.)', investingYears, setInvestingYears)}
+        {field('Period isplate (god.)', payoutYears, setPayoutYears)}
+        {field('Očekivani prinos, netiran za inflaciju (%)', expectedReturnPct, setExpectedReturnPct, 'npr. 4')}
+        {field('Trenutni kapital (€)', currentCapital, setCurrentCapital)}
+        {field('Mjesečna uplata (€)', monthlyContribution, setMonthlyContribution)}
+        {field('Godišnji rast uplata (%)', contributionGrowthPct, setContributionGrowthPct)}
+        {field('Naknada banke/platforme (%)', feePct, setFeePct)}
+        {field('Očekivana državna mirovina (€)', expectedPension, setExpectedPension)}
+      </div>
+      <div className="flex items-center justify-end gap-2">
+        <button onClick={onCancel} className="text-sm px-3.5 py-1.5 rounded-md" style={{ color: C.textMuted, border: `1px solid ${C.border}` }}>Odustani</button>
+        <button
+          disabled={!canSave} onClick={handleSave}
+          className="text-sm px-4 py-1.5 rounded-md font-semibold"
+          style={{ background: canSave ? C.goldSoft : C.borderSoft, color: canSave ? C.bg : C.textFaint, cursor: canSave ? 'pointer' : 'not-allowed' }}
+        >
+          Spremi
+        </button>
+      </div>
+    </Card>
+  );
+}
+
+function FiScenarioCard({ scenario, onEdit, onDelete, hide }) {
+  const [open, setOpen] = useState(false);
+  const result = useMemo(() => computeFiScenario(scenario), [scenario]);
+
+  const chartData = result.years.map((y) => ({
+    year: y.year,
+    uloženo: y.startingBalance + y.contributions,
+    stanje: y.finalBalance,
+  }));
+
+  const stats = [
+    { label: `Kapital na prekretnici (${result.milestoneYear}., ${result.milestoneAge} god.)`, value: result.capitalAtRetirement },
+    { label: 'Ukupno uloženo', value: result.totalInvested },
+    { label: 'Ukupna dobit', value: result.totalProfit },
+    { label: `Mjesečna renta (${Math.round(scenario.payoutYears)} god., do ${result.endYear}.)`, value: result.monthlyPayout },
+    { label: '+ mirovina = ukupno mjesečno', value: result.monthlyIncomeWithPension },
+    { label: 'Vječna isplata (bez trošenja glavnice)', value: result.perpetualMonthlyWithdrawal },
+  ];
+
+  return (
+    <Card style={{ padding: 0, overflow: 'hidden' }}>
+      <button onClick={() => setOpen((o) => !o)} className="w-full flex items-center justify-between gap-3 px-4 py-3">
+        <div className="flex items-center gap-2.5 min-w-0">
+          <Target size={15} color={C.gold} style={{ flexShrink: 0 }} />
+          <span className="text-sm font-semibold truncate" style={{ color: C.text }}>{scenario.name}</span>
+          <span className="text-xs shrink-0" style={{ color: C.textFaint }}>
+            {Math.round(scenario.currentAge)} → {result.milestoneAge} → {result.endAge} god.
+          </span>
+        </div>
+        <div className="flex items-center gap-3 shrink-0">
+          <span className="text-sm" style={{ color: C.text, fontVariantNumeric: 'tabular-nums' }}>{mFmt(hide, result.capitalAtRetirement)}</span>
+          {open ? <ChevronUp size={16} color={C.textFaint} /> : <ChevronDown size={16} color={C.textFaint} />}
+        </div>
+      </button>
+      {open && (
+        <div className="px-4 pb-4">
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mb-4">
+            {stats.map((s) => (
+              <div key={s.label} className="rounded-md px-3 py-2.5" style={{ background: C.surface, border: `1px solid ${C.border}` }}>
+                <div className="text-xs" style={{ color: C.textFaint }}>{s.label}</div>
+                <div style={{ color: C.text, fontSize: 16, fontVariantNumeric: 'tabular-nums', marginTop: 2 }}>{mFmt(hide, s.value)}</div>
+              </div>
+            ))}
+          </div>
+
+          {chartData.length > 0 && (
+            <ChartMask on={hide}>
+              <ResponsiveContainer width="100%" height={220}>
+                <AreaChart data={chartData} margin={{ left: -10, right: 10 }}>
+                  <defs>
+                    <linearGradient id={`gFiStanje-${scenario.id}`} x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor={C.goldSoft} stopOpacity={0.35} />
+                      <stop offset="100%" stopColor={C.goldSoft} stopOpacity={0} />
+                    </linearGradient>
+                    <linearGradient id={`gFiUlozeno-${scenario.id}`} x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor={C.textFaint} stopOpacity={0.35} />
+                      <stop offset="100%" stopColor={C.textFaint} stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid stroke={C.borderSoft} vertical={false} />
+                  <XAxis dataKey="year" stroke={C.textFaint} tick={{ fontSize: 11 }} axisLine={{ stroke: C.border }} tickLine={false} />
+                  <YAxis stroke={C.textFaint} tick={{ fontSize: 11 }} axisLine={false} tickLine={false} tickFormatter={(v) => `${Math.round(v / 1000)}k`} width={44} />
+                  <Tooltip
+                    contentStyle={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12 }}
+                    labelStyle={{ color: C.text }}
+                    formatter={(v, n) => [mFmt(hide, v), n === 'stanje' ? 'Stanje' : 'Uloženo']}
+                  />
+                  <Area type="monotone" dataKey="uloženo" stroke={C.textFaint} fill={`url(#gFiUlozeno-${scenario.id})`} strokeWidth={2} name="uloženo" />
+                  <Area type="monotone" dataKey="stanje" stroke={C.goldSoft} fill={`url(#gFiStanje-${scenario.id})`} strokeWidth={2} name="stanje" />
+                </AreaChart>
+              </ResponsiveContainer>
+            </ChartMask>
+          )}
+
+          <div className="flex items-center justify-end gap-3 mt-3">
+            <button onClick={() => onEdit(scenario)} className="text-xs" style={{ color: C.textMuted }}>Uredi</button>
+            <button onClick={() => onDelete(scenario.id)} className="text-xs" style={{ color: C.textFaint }}>Obriši</button>
+          </div>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function FinancialIndependence({ fiScenarios, setFiScenarios, hide, onToggleHide }) {
+  const [adding, setAdding] = useState(false);
+  const [editingId, setEditingId] = useState(null);
+  const editingScenario = editingId ? fiScenarios.find((f) => f.id === editingId) : null;
+
+  const handleSave = (scenario) => {
+    setFiScenarios((prev) => {
+      const exists = prev.some((f) => f.id === scenario.id);
+      return exists ? prev.map((f) => (f.id === scenario.id ? scenario : f)) : [...prev, scenario];
+    });
+    setAdding(false);
+    setEditingId(null);
+  };
+
+  const handleDelete = (id) => {
+    const scenario = fiScenarios.find((f) => f.id === id);
+    const ok = window.confirm(`Obrisati scenarij "${scenario?.name}"? Ova radnja se ne može poništiti.`);
+    if (ok) setFiScenarios((prev) => prev.filter((f) => f.id !== id));
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex justify-end">
+        <PrivacyButton on={hide} onToggle={onToggleHide} label="iznose na ovoj stranici" />
+      </div>
+
+      <Card style={{ padding: '20px 24px' }}>
+        <div className="text-xs uppercase tracking-wide" style={{ color: C.textFaint, letterSpacing: '0.08em' }}>Financijska neovisnost</div>
+        <div className="text-sm mt-1.5" style={{ color: C.textMuted, maxWidth: 680 }}>
+          Koliko kapitala trebaš do "prekretnice" i koliko bi ti mjesečno renta donosila u mirovini, na temelju dobi,
+          perioda ulaganja/isplate, očekivanog realnog prinosa (netiranog za inflaciju) i mjesečnih uplata koje po
+          želji rastu svake godine. Spremi više scenarija (npr. optimističan/pesimističan) da usporediš pretpostavke.
+        </div>
+      </Card>
+
+      {!adding && !editingId && (
+        <button onClick={() => setAdding(true)} className="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md" style={{ color: C.bg, background: C.goldSoft }}>
+          <Plus size={13} /> Novi scenarij
+        </button>
+      )}
+      {adding && <FiScenarioForm onSave={handleSave} onCancel={() => setAdding(false)} />}
+      {editingScenario && <FiScenarioForm initial={editingScenario} onSave={handleSave} onCancel={() => setEditingId(null)} />}
+
+      <div className="space-y-3">
+        {fiScenarios.map((scenario) => (
+          <FiScenarioCard key={scenario.id} scenario={scenario} onEdit={(s) => setEditingId(s.id)} onDelete={handleDelete} hide={hide} />
+        ))}
+      </div>
+
+      {fiScenarios.length === 0 && !adding && (
+        <Card style={{ padding: '32px', textAlign: 'center' }}>
+          <p className="text-sm" style={{ color: C.textMuted }}>Nema spremljenih scenarija. Dodaj prvi da vidiš projekciju.</p>
+        </Card>
+      )}
+    </div>
+  );
+}
+
 function MonthPickerModal({ existingMonths, onConfirm, onCancel }) {
   const now = new Date();
   const [y, setY] = useState(now.getFullYear());
@@ -2238,6 +2592,7 @@ export default function App() {
   const [metalItems, setMetalItems] = useState([]);
   const [investments, setInvestments] = useState([]);
   const [wealthItems, setWealthItems] = useState([]);
+  const [fiScenarios, setFiScenarios] = useState([]);
   const [settings, setSettings] = useState({});
   const priceOverrides = { goldEurPerGram: settings.goldEurPerGram ?? '', silverEurPerGram: settings.silverEurPerGram ?? '' };
   const setPriceOverrides = (next) => setSettings((prev) => ({ ...prev, goldEurPerGram: next.goldEurPerGram, silverEurPerGram: next.silverEurPerGram }));
@@ -2246,6 +2601,7 @@ export default function App() {
   const [draft, setDraft] = useState(null);
   const [notice, setNotice] = useState('');
   const [monthPickerOpen, setMonthPickerOpen] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   // Privatnost: svaka stranica ima svoj gumb za skrivanje iznosa (pagePrivacy[tab]).
   // Glavni gumb u headeru je "master" - nema svoj poseban state, nego je IZVEDEN
@@ -2258,6 +2614,7 @@ export default function App() {
   const [pagePrivacy, setPagePrivacy] = useState({
     pregled: false, unos: false, povijest: false, kategorije: false,
     diverzifikacija: false, vrstaImovine: false, potrosnaImovina: false, plemenitiMetali: false, ulaganja: false,
+    financijskaNeovisnost: false,
   });
   const allPrivacyOn = Object.values(pagePrivacy).every(Boolean);
   const toggleAllPrivacy = () => {
@@ -2285,6 +2642,7 @@ export default function App() {
         if (parsed.settings) setSettings(parsed.settings);
         if (parsed.investments) setInvestments(parsed.investments);
         if (parsed.wealthItems) setWealthItems(parsed.wealthItems);
+        if (parsed.fiScenarios) setFiScenarios(parsed.fiScenarios);
         setLoaded(true);
       } catch (e) {
         if (cancelled) return;
@@ -2312,7 +2670,7 @@ export default function App() {
             // ovdje je uvijek namjerno (korisnik je stvarno obrisao sve).
             'X-Confirm-Wipe': snapshots.length === 0 ? 'true' : 'false',
           },
-          body: JSON.stringify({ categories, snapshots, consumptionAssets, metalItems, settings, investments, wealthItems }),
+          body: JSON.stringify({ categories, snapshots, consumptionAssets, metalItems, settings, investments, wealthItems, fiScenarios }),
         });
         if (!res.ok) throw new Error('save failed');
       } catch (e) {
@@ -2320,7 +2678,7 @@ export default function App() {
         setTimeout(() => setNotice(''), 4500);
       }
     })();
-  }, [categories, snapshots, consumptionAssets, metalItems, settings, investments, wealthItems, loaded]);
+  }, [categories, snapshots, consumptionAssets, metalItems, settings, investments, wealthItems, fiScenarios, loaded]);
 
   const sorted = useMemo(() => [...snapshots].sort((a, b) => a.month.localeCompare(b.month)), [snapshots]);
 
@@ -2387,6 +2745,8 @@ export default function App() {
   };
 
 
+  const selectTab = (id) => { setTab(id); setSidebarOpen(false); };
+
   return (
     <div style={{ minHeight: '100vh', background: C.bg, color: C.text, fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif' }}>
       {monthPickerOpen && (
@@ -2396,38 +2756,41 @@ export default function App() {
           onCancel={() => setMonthPickerOpen(false)}
         />
       )}
-      <div style={{ maxWidth: 1040, margin: '0 auto', padding: '28px 20px 64px' }}>
-        <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
-          <div className="flex items-center gap-3">
-            <div>
-              <div style={{ fontFamily: 'Georgia, "Iowan Old Style", serif', fontSize: 24, letterSpacing: '0.01em' }}>Moj Kompić</div>
-              <div className="text-xs" style={{ color: C.textFaint }}>Osobna knjiga imovine, mjesec po mjesec</div>
-            </div>
-            <PrivacyButton on={allPrivacyOn} onToggle={toggleAllPrivacy} label="sve iznose u aplikaciji" size="md" />
-          </div>
-          <div className="flex items-center gap-1 p-1 rounded-lg" style={{ background: C.surface, border: `1px solid ${C.border}` }}>
-            <TabButton id="pregled" label="Pregled" icon={LayoutGrid} activeTab={tab} onSelect={setTab} />
-            <TabButton id="unos" label="Unos" icon={PencilLine} activeTab={tab} onSelect={setTab} />
-            <TabButton id="povijest" label="Povijest" icon={HistoryIcon} activeTab={tab} onSelect={setTab} />
-            <TabButton id="kategorije" label="Kategorije" icon={Settings2} activeTab={tab} onSelect={setTab} />
-            <TabButton id="diverzifikacija" label="Diverzifikacija" icon={PieChartIcon} activeTab={tab} onSelect={setTab} />
-            <TabButton id="vrstaImovine" label="Vrsta imovine" icon={Layers} activeTab={tab} onSelect={setTab} />
-            <TabButton id="potrosnaImovina" label="Potrošna imovina" icon={Car} activeTab={tab} onSelect={setTab} />
-            <TabButton id="plemenitiMetali" label="Plemeniti metali" icon={Coins} activeTab={tab} onSelect={setTab} />
-            <TabButton id="ulaganja" label="Ulaganja" icon={Briefcase} activeTab={tab} onSelect={setTab} />
-            <TabButton id="generacijskoBogatstvo" label="Generacijsko bogatstvo" icon={Gem} activeTab={tab} onSelect={setTab} />
-          </div>
-        </div>
+      <div className="flex" style={{ minHeight: '100vh' }}>
+        {/* Bočni izbornik - fiksan i uvijek vidljiv na desktopu (md+) */}
+        <aside
+          className="hidden md:block"
+          style={{ width: 248, flexShrink: 0, background: C.panel, borderRight: `1px solid ${C.border}`, position: 'sticky', top: 0, alignSelf: 'flex-start', height: '100vh', overflowY: 'auto' }}
+        >
+          <SidebarContent tab={tab} onSelect={setTab} allPrivacyOn={allPrivacyOn} onToggleAllPrivacy={toggleAllPrivacy} />
+        </aside>
 
-        {latest && tab !== 'unos' && (
-          <div className="mb-5">
-            <button onClick={() => startDraft()} className="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md" style={{ color: C.bg, background: C.goldSoft }}>
-              <Plus size={13} /> Unesi novi mjesec <ArrowRight size={12} />
-            </button>
+        {/* Isti izbornik kao preklopni panel na mobitelu/uskim ekranima */}
+        {sidebarOpen && (
+          <div className="md:hidden fixed inset-0 z-50 flex">
+            <div style={{ width: 260, background: C.panel, borderRight: `1px solid ${C.border}` }} className="h-full overflow-y-auto">
+              <SidebarContent tab={tab} onSelect={selectTab} allPrivacyOn={allPrivacyOn} onToggleAllPrivacy={toggleAllPrivacy} onClose={() => setSidebarOpen(false)} />
+            </div>
+            <div className="flex-1" style={{ background: 'rgba(0,0,0,0.5)' }} onClick={() => setSidebarOpen(false)} />
           </div>
         )}
 
-        {notice && <div className="mb-4 text-sm px-3 py-2 rounded-md" style={{ background: 'rgba(193,106,72,0.12)', color: C.rust, border: `1px solid ${C.rust}55` }}>{notice}</div>}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div className="md:hidden flex items-center gap-3 px-4 py-3" style={{ borderBottom: `1px solid ${C.border}`, background: C.panel }}>
+            <button onClick={() => setSidebarOpen(true)} style={{ color: C.textMuted }}><Menu size={20} /></button>
+            <div style={{ fontFamily: 'Georgia, "Iowan Old Style", serif', fontSize: 18 }}>Moj Kompić</div>
+          </div>
+
+          <div style={{ maxWidth: 1040, margin: '0 auto', padding: '28px 20px 64px' }}>
+            {latest && tab !== 'unos' && (
+              <div className="mb-5">
+                <button onClick={() => startDraft()} className="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md" style={{ color: C.bg, background: C.goldSoft }}>
+                  <Plus size={13} /> Unesi novi mjesec <ArrowRight size={12} />
+                </button>
+              </div>
+            )}
+
+            {notice && <div className="mb-4 text-sm px-3 py-2 rounded-md" style={{ background: 'rgba(193,106,72,0.12)', color: C.rust, border: `1px solid ${C.rust}55` }}>{notice}</div>}
 
         {tab === 'pregled' && (
           <Overview
@@ -2492,6 +2855,14 @@ export default function App() {
         {tab === 'generacijskoBogatstvo' && (
           <GenerationalWealth wealthItems={wealthItems} setWealthItems={setWealthItems} />
         )}
+        {tab === 'financijskaNeovisnost' && (
+          <FinancialIndependence
+            fiScenarios={fiScenarios} setFiScenarios={setFiScenarios}
+            hide={pagePrivacy.financijskaNeovisnost} onToggleHide={() => togglePagePrivacy('financijskaNeovisnost')}
+          />
+        )}
+          </div>
+        </div>
       </div>
     </div>
   );

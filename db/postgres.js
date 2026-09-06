@@ -89,6 +89,20 @@ export async function init() {
       content TEXT NOT NULL,
       sort_order INTEGER NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS fi_scenarios (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      current_age DOUBLE PRECISION NOT NULL,
+      investing_years DOUBLE PRECISION NOT NULL,
+      payout_years DOUBLE PRECISION NOT NULL,
+      expected_return_pct DOUBLE PRECISION NOT NULL,
+      current_capital DOUBLE PRECISION NOT NULL,
+      monthly_contribution DOUBLE PRECISION NOT NULL,
+      contribution_growth_pct DOUBLE PRECISION NOT NULL DEFAULT 0,
+      fee_pct DOUBLE PRECISION NOT NULL DEFAULT 0,
+      expected_pension DOUBLE PRECISION NOT NULL DEFAULT 0,
+      sort_order INTEGER NOT NULL
+    );
   `);
 }
 
@@ -119,6 +133,14 @@ export async function getState() {
   const { rows: wealthRows } = await p.query(`
     SELECT id, category, item_date AS "itemDate", content
     FROM wealth_items ORDER BY sort_order
+  `);
+  const { rows: fiRows } = await p.query(`
+    SELECT id, name, current_age AS "currentAge", investing_years AS "investingYears",
+           payout_years AS "payoutYears", expected_return_pct AS "expectedReturnPct",
+           current_capital AS "currentCapital", monthly_contribution AS "monthlyContribution",
+           contribution_growth_pct AS "contributionGrowthPct", fee_pct AS "feePct",
+           expected_pension AS "expectedPension"
+    FROM fi_scenarios ORDER BY sort_order
   `);
 
   const snapshots = snapshotRows.map((s) => ({
@@ -158,10 +180,23 @@ export async function getState() {
 
   const wealthItems = wealthRows;
 
-  return { categories, snapshots, consumptionAssets, metalItems, settings, investments, wealthItems };
+  const fiScenarios = fiRows.map((f) => ({
+    ...f,
+    currentAge: Number(f.currentAge),
+    investingYears: Number(f.investingYears),
+    payoutYears: Number(f.payoutYears),
+    expectedReturnPct: Number(f.expectedReturnPct),
+    currentCapital: Number(f.currentCapital),
+    monthlyContribution: Number(f.monthlyContribution),
+    contributionGrowthPct: Number(f.contributionGrowthPct),
+    feePct: Number(f.feePct),
+    expectedPension: Number(f.expectedPension),
+  }));
+
+  return { categories, snapshots, consumptionAssets, metalItems, settings, investments, wealthItems, fiScenarios };
 }
 
-export async function saveState({ categories = [], snapshots = [], consumptionAssets = [], metalItems = [], settings = {}, investments = [], wealthItems = [] }) {
+export async function saveState({ categories = [], snapshots = [], consumptionAssets = [], metalItems = [], settings = {}, investments = [], wealthItems = [], fiScenarios = [] }) {
   const p = getPool();
   const client = await p.connect();
   try {
@@ -176,6 +211,7 @@ export async function saveState({ categories = [], snapshots = [], consumptionAs
     await client.query('DELETE FROM app_settings');
     await client.query('DELETE FROM investments');
     await client.query('DELETE FROM wealth_items');
+    await client.query('DELETE FROM fi_scenarios');
 
     for (let i = 0; i < categories.length; i++) {
       const c = categories[i];
@@ -246,6 +282,20 @@ export async function saveState({ categories = [], snapshots = [], consumptionAs
       await client.query(
         'INSERT INTO wealth_items (id, category, item_date, content, sort_order) VALUES ($1,$2,$3,$4,$5)',
         [w.id, w.category, w.itemDate || null, w.content || '', i]
+      );
+    }
+    for (let i = 0; i < fiScenarios.length; i++) {
+      const f = fiScenarios[i];
+      await client.query(
+        `INSERT INTO fi_scenarios
+          (id, name, current_age, investing_years, payout_years, expected_return_pct,
+           current_capital, monthly_contribution, contribution_growth_pct, fee_pct, expected_pension, sort_order)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+        [
+          f.id, f.name || 'Scenarij', Number(f.currentAge) || 0, Number(f.investingYears) || 0, Number(f.payoutYears) || 0,
+          Number(f.expectedReturnPct) || 0, Number(f.currentCapital) || 0, Number(f.monthlyContribution) || 0,
+          Number(f.contributionGrowthPct) || 0, Number(f.feePct) || 0, Number(f.expectedPension) || 0, i,
+        ]
       );
     }
     await client.query('COMMIT');
