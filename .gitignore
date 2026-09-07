@@ -5,6 +5,7 @@ moj-kompic.db
 moj-kompic.db-shm
 moj-kompic.db-wal
 .env
+Claude outputs
 
 # Osobni/stvarni podaci - nikad u git (vidi db/*.local.js, scripts/*.local.json)
 *.local.js
