@@ -57,7 +57,16 @@ const FALLBACK_NOTE = 'Uvezeno iz Notion Investment Journala';
 const noteFor = (r) => (r.comment && String(r.comment).trim() ? String(r.comment).trim() : FALLBACK_NOTE);
 
 function main() {
-  const rawPath = path.join(__dirname, 'notion-investments-raw.json');
+  const rawPath = path.join(__dirname, 'notion-investments-raw.local.json');
+  if (!fs.existsSync(rawPath)) {
+    console.error(
+      `Nedostaje ${rawPath}.\n` +
+      'Ova skripta uvozi iz tvog osobnog Notion exporta - taj fajl namjerno NIJE ' +
+      'u git repozitoriju (sadrži stvarne financijske podatke). Ako ti ponovno ' +
+      'zatreba, izvezi ponovno iz Notiona ili ga vrati iz lokalnog backupa.'
+    );
+    process.exit(1);
+  }
   const raw = JSON.parse(fs.readFileSync(rawPath, 'utf8'));
 
   const candidates = [];

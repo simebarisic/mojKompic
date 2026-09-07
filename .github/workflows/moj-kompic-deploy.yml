@@ -25,6 +25,9 @@ jobs:
           script: |
             set -e
             cd ~/apps/moj-kompic
+            cat > .env <<'ENVEOF'
+            POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}
+            ENVEOF
             export IMAGE_TAG="${{ github.event.inputs.image_tag }}"
             if [ -z "$IMAGE_TAG" ]; then
               IMAGE_TAG=latest
