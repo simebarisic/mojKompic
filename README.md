@@ -29,6 +29,30 @@ App: http://localhost:3001
 Zasebna instanca s izmišljenim podacima, odvojena baza/port - vidi komentare
 na vrhu `docker-compose.demo.yml`.
 
+## Prijava lozinkom (samo prava instanca)
+
+Prava instanca (`docker-compose.yml` / `docker-compose.prod.yml`) može tražiti
+lozinku prije prikaza aplikacije - jednostavna sesijska prijava, bez korisničkih
+računa. Demo instanca (`docker-compose.demo.yml`) namjerno OSTAJE bez prijave.
+
+Uključivanje:
+
+```bash
+npm run hash-password        # upiši lozinku, dobiješ bcrypt hash
+```
+
+Zalijepi ispisani `AUTH_PASSWORD_HASH=...` u `.env` (vidi `.env.example`).
+Bez postavljenog `AUTH_PASSWORD_HASH`, aplikacija radi kao dosad, bez prijave.
+
+Ako je instanca iza HTTPS-a (npr. kad mordor dobije domenu/Nginx), postavi i
+`COOKIE_SECURE=true` u `.env`.
+
+Deploy preko `moj-kompic-deploy.yml` prepisuje `.env` na mordoru iz GitHub
+Secreta pri svakom pokretanju - da prijava preživi deploy, dodaj u repo
+(Settings → Secrets and variables → Actions, `production` environment):
+`AUTH_PASSWORD_HASH`, `SESSION_SECRET` (Secrets) i po želji `COOKIE_SECURE`
+(Variables).
+
 ## Osobni podaci (.local. fajlovi)
 
 `db/generational-wealth-seed-data.js` i `scripts/import-notion-investments.js`
@@ -54,4 +78,6 @@ moj-kompic/
 - `.github/workflows/moj-kompic-deploy.yml` — **ručni** deploy (workflow_dispatch)
   na mordor preko SSH-a; namjerno nema automatski `on: push` deploy, to je
   besplatni ekvivalent "required reviewers" gatea. Treba GitHub Secrets:
-  `MORDOR_HOST`, `MORDOR_USER`, `MORDOR_SSH_KEY`, `POSTGRES_PASSWORD`.
+  `MORDOR_HOST`, `MORDOR_USER`, `MORDOR_SSH_KEY`, `POSTGRES_PASSWORD`,
+  `AUTH_PASSWORD_HASH`, `SESSION_SECRET` (vidi "Prijava lozinkom" iznad) i
+  po želji Variable `COOKIE_SECURE`.

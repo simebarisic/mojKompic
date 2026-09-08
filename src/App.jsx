@@ -8,7 +8,7 @@ import {
   CreditCard, Copy, LayoutGrid, PencilLine, History as HistoryIcon,
   Settings2, Save, ArrowRight, Landmark, PieChart as PieChartIcon, Layers, Car,
   Eye, EyeOff, Coins, RefreshCw, AlertTriangle, Briefcase, RotateCcw, ChevronDown, ChevronUp, Gem, GripVertical, Target,
-  Menu, X, Bitcoin
+  Menu, X, Bitcoin, LogOut
 } from 'lucide-react';
 
 /* ---------- design tokens ---------- */
@@ -499,7 +499,7 @@ function SidebarNavItem({ id, label, icon: Icon, activeTab, onSelect }) {
   );
 }
 
-function SidebarContent({ tab, onSelect, allPrivacyOn, onToggleAllPrivacy, onClose }) {
+function SidebarContent({ tab, onSelect, allPrivacyOn, onToggleAllPrivacy, onClose, authEnabled }) {
   return (
     <div className="flex flex-col h-full" style={{ padding: '18px 12px' }}>
       <div className="flex items-start justify-between px-1.5">
@@ -528,6 +528,13 @@ function SidebarContent({ tab, onSelect, allPrivacyOn, onToggleAllPrivacy, onClo
           </div>
         ))}
       </nav>
+      {authEnabled && (
+        <div className="pt-3 mt-1 px-1.5" style={{ borderTop: `1px solid ${C.borderSoft}` }}>
+          <a href="/logout" className="w-full flex items-center gap-2.5 px-3 py-2 text-sm rounded-md transition-colors" style={{ color: C.textFaint }}>
+            <LogOut size={15} style={{ flexShrink: 0 }} /> Odjava
+          </a>
+        </div>
+      )}
     </div>
   );
 }
@@ -1755,18 +1762,46 @@ function PreciousMetals({ metalItems, setMetalItems, priceOverrides, setPriceOve
 // ODVOJENO od kategorija/Unosa/neto vrijednosti (vidi holdingsHistory u App):
 // nema automatskog eurskog izračuna, samo količina po mjesecu + graf kretanja.
 // Za Bitcoin dodatno nudi upareno polje za satošije (unos u bilo koje od dva
-// polja odmah preračunava drugo). Jedna instanca komponente po vrsti
-// (kind: 'bitcoin' | 'gold' | 'silver') - vidi tabove niže u App().
+// polja odmah preračunava drugo). Svaki mjesec se može razdijeliti na više
+// unosa po "lokaciji" (npr. cold wallet, mjenjačnica) - graf i "trenutna
+// količina" prate zbroj svih lokacija za taj mjesec (vidi monthlyTotals).
+// Jedna instanca komponente po vrsti (kind: 'bitcoin' | 'gold' | 'silver') -
+// vidi tabove niže u App().
 function HoldingsTrackerTab({ kind, label, unit, color, decimals = 2, allowSats = false, holdingsHistory, setHoldingsHistory, hide, onToggleHide }) {
   const entries = useMemo(
-    () => holdingsHistory.filter((h) => h.kind === kind).sort((a, b) => a.month.localeCompare(b.month)),
+    () => holdingsHistory
+      .filter((h) => h.kind === kind)
+      .sort((a, b) => a.month.localeCompare(b.month) || (a.location || '').localeCompare(b.location || '')),
     [holdingsHistory, kind]
   );
-  const latest = entries[entries.length - 1];
-  const previous = entries[entries.length - 2];
-  const change = latest && previous ? latest.quantity - previous.quantity : null;
+
+  // Ukupna količina po mjesecu = zbroj svih lokacija unesenih za taj mjesec
+  // (npr. cold wallet + mjenjačnica) - graf i "trenutna količina" prate ovo.
+  const monthlyTotals = useMemo(() => {
+    const map = new Map();
+    entries.forEach((h) => map.set(h.month, (map.get(h.month) || 0) + (Number(h.quantity) || 0)));
+    return Array.from(map.entries())
+      .map(([m, quantity]) => ({ month: m, quantity }))
+      .sort((a, b) => a.month.localeCompare(b.month));
+  }, [entries]);
+
+  const latestTotal = monthlyTotals[monthlyTotals.length - 1];
+  const previousTotal = monthlyTotals[monthlyTotals.length - 2];
+  const change = latestTotal && previousTotal ? latestTotal.quantity - previousTotal.quantity : null;
+  const latestMonthEntries = latestTotal ? entries.filter((h) => h.month === latestTotal.month) : [];
+
+  const knownLocations = useMemo(
+    () => Array.from(new Set(entries.map((h) => h.location).filter(Boolean))).sort(),
+    [entries]
+  );
+
+  const monthsDesc = useMemo(
+    () => Array.from(new Set(entries.map((h) => h.month))).sort().reverse(),
+    [entries]
+  );
 
   const [month, setMonth] = useState(thisMonthStr());
+  const [location, setLocation] = useState('');
   const [qtyInput, setQtyInput] = useState('');
   const [satInput, setSatInput] = useState('');
   const [y, mo] = month.split('-').map(Number);
@@ -1788,35 +1823,37 @@ function HoldingsTrackerTab({ kind, label, unit, color, decimals = 2, allowSats 
   const handleSave = () => {
     const n = Number(qtyInput);
     if (qtyInput === '' || Number.isNaN(n)) return;
-    const existing = entries.find((h) => h.month === month);
+    const loc = location.trim();
+    const existing = entries.find((h) => h.month === month && (h.location || '') === loc);
     if (existing && existing.quantity !== n) {
-      const ok = window.confirm(`Za ${monthLabelFull(month)} već postoji unesena količina (${fmtQty(existing.quantity)} ${unit}). Prebrisati?`);
+      const ok = window.confirm(`Za ${monthLabelFull(month)}${loc ? ` · ${loc}` : ''} već postoji unesena količina (${fmtQty(existing.quantity)} ${unit}). Prebrisati?`);
       if (!ok) return;
     }
     setHoldingsHistory((prev) => {
-      const idx = prev.findIndex((h) => h.kind === kind && h.month === month);
+      const idx = prev.findIndex((h) => h.kind === kind && h.month === month && (h.location || '') === loc);
       if (idx >= 0) {
         const copy = [...prev];
-        copy[idx] = { ...copy[idx], quantity: n };
+        copy[idx] = { ...copy[idx], quantity: n, location: loc };
         return copy;
       }
-      return [...prev, { id: uid(), kind, month, quantity: n }];
+      return [...prev, { id: uid(), kind, month, location: loc, quantity: n }];
     });
-    setQtyInput(''); setSatInput('');
+    setQtyInput(''); setSatInput(''); setLocation('');
   };
 
   const handleEdit = (h) => {
     setMonth(h.month);
+    setLocation(h.location || '');
     setQtyInput(String(h.quantity));
     if (allowSats) setSatInput(String(Math.round(h.quantity * 100000000)));
   };
 
   const handleDelete = (h) => {
-    const ok = window.confirm(`Obrisati unos za ${monthLabelFull(h.month)}? Ova radnja se ne može poništiti.`);
+    const ok = window.confirm(`Obrisati unos za ${monthLabelFull(h.month)}${h.location ? ` · ${h.location}` : ''}? Ova radnja se ne može poništiti.`);
     if (ok) setHoldingsHistory((prev) => prev.filter((x) => x.id !== h.id));
   };
 
-  const chartData = entries.map((h) => ({ month: monthLabel(h.month), qty: h.quantity }));
+  const chartData = monthlyTotals.map((h) => ({ month: monthLabel(h.month), qty: h.quantity }));
 
   return (
     <div className="space-y-6">
@@ -1827,17 +1864,27 @@ function HoldingsTrackerTab({ kind, label, unit, color, decimals = 2, allowSats 
       <Card style={{ padding: '20px 24px' }}>
         <div className="text-xs uppercase tracking-wide" style={{ color: C.textFaint, letterSpacing: '0.08em' }}>{label} · trenutna količina</div>
         <div style={{ fontFamily: 'Georgia, "Iowan Old Style", serif', fontSize: 34, color: C.text, fontVariantNumeric: 'tabular-nums', lineHeight: 1.2 }}>
-          {!latest ? '—' : (hide ? MASK : `${fmtQty(latest.quantity)} ${unit}`)}
+          {!latestTotal ? '—' : (hide ? MASK : `${fmtQty(latestTotal.quantity)} ${unit}`)}
         </div>
-        {latest && allowSats && !hide && (
-          <div className="text-xs mt-0.5" style={{ color: C.textFaint }}>≈ {fmtQty(Math.round(latest.quantity * 100000000)).replace(/,00$/, '')} sat</div>
+        {latestTotal && allowSats && !hide && (
+          <div className="text-xs mt-0.5" style={{ color: C.textFaint }}>≈ {fmtQty(Math.round(latestTotal.quantity * 100000000)).replace(/,00$/, '')} sat</div>
         )}
         {change !== null && (
           <div className="text-sm mt-1" style={{ color: change >= 0 ? C.tealSoft : C.rust }}>
-            {change >= 0 ? '+' : ''}{hide ? MASK : `${fmtQty(change)} ${unit}`} u odnosu na {monthLabel(previous.month)}
+            {change >= 0 ? '+' : ''}{hide ? MASK : `${fmtQty(change)} ${unit}`} u odnosu na {monthLabel(previousTotal.month)}
           </div>
         )}
-        {!latest && <div className="text-sm mt-1" style={{ color: C.textMuted }}>Još nema unesenih mjeseci.</div>}
+        {!latestTotal && <div className="text-sm mt-1" style={{ color: C.textMuted }}>Još nema unesenih mjeseci.</div>}
+        {latestMonthEntries.length > 1 && (
+          <div className="mt-3 pt-3 space-y-1" style={{ borderTop: `1px dashed ${C.borderSoft}` }}>
+            {latestMonthEntries.map((h) => (
+              <div key={h.id} className="flex items-center justify-between text-xs">
+                <span style={{ color: C.textFaint }}>{h.location || 'Bez oznake'}</span>
+                <span style={{ color: C.textMuted, fontVariantNumeric: 'tabular-nums', filter: hide ? 'blur(5px)' : 'none' }}>{fmtQty(h.quantity)} {unit}</span>
+              </div>
+            ))}
+          </div>
+        )}
       </Card>
 
       <Card style={{ padding: '18px 20px' }}>
@@ -1857,6 +1904,14 @@ function HoldingsTrackerTab({ kind, label, unit, color, decimals = 2, allowSats 
             </div>
           </div>
           <div>
+            <div className="text-xs mb-1" style={{ color: C.textFaint }}>Lokacija (opcionalno)</div>
+            <input list={`${kind}-locations`} value={location} onChange={(e) => setLocation(e.target.value)} placeholder="npr. Ledger, Binance..."
+              className="w-40 text-sm rounded-md px-2.5 py-1.5" style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.text }} />
+            <datalist id={`${kind}-locations`}>
+              {knownLocations.map((l) => <option key={l} value={l} />)}
+            </datalist>
+          </div>
+          <div>
             <div className="text-xs mb-1" style={{ color: C.textFaint }}>Količina ({unit})</div>
             <input type="number" step="any" value={qtyInput} onChange={(e) => onQtyChange(e.target.value)} placeholder={`0 ${unit}`}
               className="w-36 text-sm rounded-md px-2.5 py-1.5 text-right" style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.text, fontVariantNumeric: 'tabular-nums' }} />
@@ -1871,6 +1926,9 @@ function HoldingsTrackerTab({ kind, label, unit, color, decimals = 2, allowSats 
           <button onClick={handleSave} className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-md text-sm font-semibold" style={{ background: C.goldSoft, color: C.bg }}>
             <Save size={14} /> Spremi
           </button>
+        </div>
+        <div className="text-xs mt-2" style={{ color: C.textFaint }}>
+          Ostavi lokaciju praznom za jedan zbirni unos, ili razdijeli isti mjesec na više lokacija (npr. cold wallet, mjenjačnica) — zbrajaju se u ukupnu količinu iznad.
         </div>
       </Card>
 
@@ -1901,27 +1959,45 @@ function HoldingsTrackerTab({ kind, label, unit, color, decimals = 2, allowSats 
               <thead>
                 <tr style={{ borderBottom: `1px solid ${C.border}`, color: C.textFaint, textAlign: 'left' }}>
                   <th className="px-4 py-3 font-medium">Mjesec</th>
+                  <th className="px-4 py-3 font-medium">Lokacija</th>
                   <th className="px-4 py-3 font-medium text-right">Količina</th>
                   {allowSats && <th className="px-4 py-3 font-medium text-right">Satoshi</th>}
                   <th className="px-4 py-3 font-medium text-right"></th>
                 </tr>
               </thead>
               <tbody>
-                {[...entries].reverse().map((h) => (
-                  <tr key={h.id} style={{ borderBottom: `1px solid ${C.borderSoft}` }}>
-                    <td className="px-4 py-2.5" style={{ color: C.text }}>{monthLabelFull(h.month)}</td>
-                    <td className="px-4 py-2.5 text-right" style={{ color: C.text, fontVariantNumeric: 'tabular-nums', filter: hide ? 'blur(5px)' : 'none' }}>{fmtQty(h.quantity)} {unit}</td>
-                    {allowSats && (
-                      <td className="px-4 py-2.5 text-right" style={{ color: C.textFaint, fontVariantNumeric: 'tabular-nums', filter: hide ? 'blur(5px)' : 'none' }}>
-                        {new Intl.NumberFormat('hr-HR').format(Math.round(h.quantity * 100000000))}
-                      </td>
-                    )}
-                    <td className="px-4 py-2.5 text-right whitespace-nowrap">
-                      <button onClick={() => handleEdit(h)} className="p-1.5 rounded" style={{ color: C.textMuted }}><PencilLine size={14} /></button>
-                      <button onClick={() => handleDelete(h)} className="p-1.5 rounded" style={{ color: C.textFaint }}><Trash2 size={14} /></button>
-                    </td>
-                  </tr>
-                ))}
+                {monthsDesc.map((m) => {
+                  const monthEntries = entries.filter((h) => h.month === m);
+                  const monthTotal = monthEntries.reduce((s, h) => s + (Number(h.quantity) || 0), 0);
+                  return (
+                    <React.Fragment key={m}>
+                      {monthEntries.map((h) => (
+                        <tr key={h.id} style={{ borderBottom: `1px solid ${C.borderSoft}` }}>
+                          <td className="px-4 py-2.5" style={{ color: C.text }}>{monthLabelFull(h.month)}</td>
+                          <td className="px-4 py-2.5" style={{ color: C.textFaint }}>{h.location || '—'}</td>
+                          <td className="px-4 py-2.5 text-right" style={{ color: C.text, fontVariantNumeric: 'tabular-nums', filter: hide ? 'blur(5px)' : 'none' }}>{fmtQty(h.quantity)} {unit}</td>
+                          {allowSats && (
+                            <td className="px-4 py-2.5 text-right" style={{ color: C.textFaint, fontVariantNumeric: 'tabular-nums', filter: hide ? 'blur(5px)' : 'none' }}>
+                              {new Intl.NumberFormat('hr-HR').format(Math.round(h.quantity * 100000000))}
+                            </td>
+                          )}
+                          <td className="px-4 py-2.5 text-right whitespace-nowrap">
+                            <button onClick={() => handleEdit(h)} className="p-1.5 rounded" style={{ color: C.textMuted }}><PencilLine size={14} /></button>
+                            <button onClick={() => handleDelete(h)} className="p-1.5 rounded" style={{ color: C.textFaint }}><Trash2 size={14} /></button>
+                          </td>
+                        </tr>
+                      ))}
+                      {monthEntries.length > 1 && (
+                        <tr style={{ borderBottom: `1px solid ${C.border}` }}>
+                          <td className="px-4 py-2" colSpan={2} style={{ color: C.textFaint, fontStyle: 'italic' }}>Ukupno {monthLabel(m)}</td>
+                          <td className="px-4 py-2 text-right font-semibold" style={{ color: C.text, fontVariantNumeric: 'tabular-nums', filter: hide ? 'blur(5px)' : 'none' }}>{fmtQty(monthTotal)} {unit}</td>
+                          {allowSats && <td className="px-4 py-2"></td>}
+                          <td className="px-4 py-2"></td>
+                        </tr>
+                      )}
+                    </React.Fragment>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -2867,6 +2943,10 @@ export default function App() {
   const [notice, setNotice] = useState('');
   const [monthPickerOpen, setMonthPickerOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  // Je li login uključen na ovoj instanci (postavlja se preko AUTH_PASSWORD_HASH
+  // u server.js) - samo za prikaz "Odjava" poveznice u izborniku; sama zaštita
+  // je posve na serveru, ovo je čisto kozmetičko.
+  const [authEnabled, setAuthEnabled] = useState(false);
 
   // Privatnost: svaka stranica ima svoj gumb za skrivanje iznosa (pagePrivacy[tab]).
   // Glavni gumb u headeru je "master" - nema svoj poseban state, nego je IZVEDEN
@@ -2921,6 +3001,13 @@ export default function App() {
     };
     load();
     return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    fetch('/api/auth-status')
+      .then((res) => res.json())
+      .then((data) => setAuthEnabled(!!data.enabled))
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -3028,14 +3115,14 @@ export default function App() {
           className="hidden md:block"
           style={{ width: 248, flexShrink: 0, background: C.panel, borderRight: `1px solid ${C.border}`, position: 'sticky', top: 0, alignSelf: 'flex-start', height: '100vh', overflowY: 'auto' }}
         >
-          <SidebarContent tab={tab} onSelect={setTab} allPrivacyOn={allPrivacyOn} onToggleAllPrivacy={toggleAllPrivacy} />
+          <SidebarContent tab={tab} onSelect={setTab} allPrivacyOn={allPrivacyOn} onToggleAllPrivacy={toggleAllPrivacy} authEnabled={authEnabled} />
         </aside>
 
         {/* Isti izbornik kao preklopni panel na mobitelu/uskim ekranima */}
         {sidebarOpen && (
           <div className="md:hidden fixed inset-0 z-50 flex">
             <div style={{ width: 260, background: C.panel, borderRight: `1px solid ${C.border}` }} className="h-full overflow-y-auto">
-              <SidebarContent tab={tab} onSelect={selectTab} allPrivacyOn={allPrivacyOn} onToggleAllPrivacy={toggleAllPrivacy} onClose={() => setSidebarOpen(false)} />
+              <SidebarContent tab={tab} onSelect={selectTab} allPrivacyOn={allPrivacyOn} onToggleAllPrivacy={toggleAllPrivacy} onClose={() => setSidebarOpen(false)} authEnabled={authEnabled} />
             </div>
             <div className="flex-1" style={{ background: 'rgba(0,0,0,0.5)' }} onClick={() => setSidebarOpen(false)} />
           </div>

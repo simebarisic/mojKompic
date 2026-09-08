@@ -21,6 +21,11 @@ services:
     environment:
       DATABASE_URL: postgres://kompic:${POSTGRES_PASSWORD}@db:5432/kompic
       PORT: 3001
+      # Login (samo prava instanca - vidi server.js). Prazno/nepostavljeno =
+      # bez prijave. Generiraj hash s "npm run hash-password".
+      AUTH_PASSWORD_HASH: ${AUTH_PASSWORD_HASH:-}
+      SESSION_SECRET: ${SESSION_SECRET:-}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
     ports:
       - "3001:3001"
 

@@ -1,4 +1,6 @@
 import express from 'express';
+import session from 'express-session';
+import bcrypt from 'bcryptjs';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
@@ -36,6 +38,156 @@ try {
 
 const app = express();
 app.use(express.json({ limit: '5mb' }));
+
+// ---- Jednostavna zaštita lozinkom (samo za "pravu" instancu) ----
+// Uključuje se SAMO ako je postavljen AUTH_PASSWORD_HASH (bcrypt hash lozinke
+// - generiraj ga s "npm run hash-password", vidi scripts/generate-password-hash.js).
+// docker-compose.demo.yml namjerno ne postavlja ovu varijablu, pa demo instanca
+// ostaje bez prijave. Sesija je obična cookie-sesija u memoriji servera (nema
+// vanjske baze za sesije) - dovoljno za jednog korisnika; restart servera
+// jednostavno traži ponovnu prijavu.
+const AUTH_PASSWORD_HASH = process.env.AUTH_PASSWORD_HASH || '';
+const AUTH_ENABLED = !!AUTH_PASSWORD_HASH;
+
+// Jednostavno ograničenje pokušaja prijave (u memoriji, po IP-u) - obrana od
+// automatiziranog pogađanja lozinke. Resetira se pri restartu servera, što je
+// prihvatljivo za osobnu aplikaciju s jednim korisnikom.
+const loginAttempts = new Map(); // ip -> { count, blockedUntil }
+const MAX_LOGIN_ATTEMPTS = 5;
+const LOGIN_BLOCK_MS = 15 * 60 * 1000; // 15 min
+
+function isLoginBlocked(ip) {
+  const a = loginAttempts.get(ip);
+  if (!a?.blockedUntil) return false;
+  if (Date.now() > a.blockedUntil) { loginAttempts.delete(ip); return false; }
+  return true;
+}
+function recordFailedLogin(ip) {
+  const a = loginAttempts.get(ip) || { count: 0, blockedUntil: null };
+  a.count += 1;
+  if (a.count >= MAX_LOGIN_ATTEMPTS) a.blockedUntil = Date.now() + LOGIN_BLOCK_MS;
+  loginAttempts.set(ip, a);
+}
+function clearLoginAttempts(ip) {
+  loginAttempts.delete(ip);
+}
+
+function renderLoginPage({ error } = {}) {
+  return `<!doctype html>
+<html lang="hr">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Moj Kompić — Prijava</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+    background: #12151b; color: #eae6db;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  form {
+    background: #1a1f28; border: 1px solid #2b3341; border-radius: 12px;
+    padding: 32px 28px; width: 100%; max-width: 320px;
+  }
+  h1 { font-size: 18px; margin: 0 0 4px; font-weight: 600; }
+  p.sub { font-size: 13px; color: #93a0b5; margin: 0 0 20px; }
+  label { font-size: 12px; color: #5d6577; display: block; margin-bottom: 6px; }
+  input[type="password"] {
+    width: 100%; padding: 9px 11px; border-radius: 8px; border: 1px solid #2b3341;
+    background: #12151b; color: #eae6db; font-size: 14px; margin-bottom: 14px;
+  }
+  input[type="password"]:focus { outline: none; border-color: #c9a227; }
+  button {
+    width: 100%; padding: 10px; border-radius: 8px; border: none;
+    background: #e7c565; color: #12151b; font-weight: 600; font-size: 14px; cursor: pointer;
+  }
+  button:hover { background: #c9a227; }
+  .error { color: #c16a48; font-size: 13px; margin: -6px 0 14px; }
+</style>
+</head>
+<body>
+  <form method="POST" action="/login">
+    <h1>Moj Kompić</h1>
+    <p class="sub">Unesi lozinku za pristup.</p>
+    ${error ? `<div class="error">${error}</div>` : ''}
+    <label for="password">Lozinka</label>
+    <input type="password" id="password" name="password" autofocus required />
+    <button type="submit">Prijavi se</button>
+  </form>
+</body>
+</html>`;
+}
+
+if (AUTH_ENABLED) {
+  // Ako je server iza reverse proxyja (Nginx/Cloudflare) - poštuje X-Forwarded-*
+  // (bitno za req.ip u rate-limitu i za "secure" cookie iza HTTPS-terminatora).
+  app.set('trust proxy', 1);
+
+  app.use(session({
+    name: 'kompic.sid',
+    secret: process.env.SESSION_SECRET || 'promijeni-me-postavi-SESSION_SECRET-u-.env',
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+      httpOnly: true,
+      sameSite: 'lax',
+      // Postavi COOKIE_SECURE=true u .env kad instanca bude iza HTTPS-a
+      // (npr. kad mordor dobije domenu/Nginx) - dok je na http://localhost
+      // ili http://IP bez HTTPS-a, MORA ostati false, inače preglednik
+      // odbija poslati cookie i prijava izgleda kao da ne radi.
+      secure: process.env.COOKIE_SECURE === 'true',
+      maxAge: 30 * 24 * 60 * 60 * 1000, // 30 dana
+    },
+  }));
+
+  app.get('/login', (req, res) => {
+    if (req.session?.authenticated) return res.redirect('/');
+    res.type('html').send(renderLoginPage());
+  });
+
+  app.post('/login', express.urlencoded({ extended: false }), async (req, res) => {
+    const ip = req.ip;
+    if (isLoginBlocked(ip)) {
+      return res.status(429).type('html').send(renderLoginPage({ error: 'Previše pokušaja. Pokušaj ponovno za 15 minuta.' }));
+    }
+    const password = (req.body?.password || '').toString();
+    let ok = false;
+    try {
+      ok = password.length > 0 && await bcrypt.compare(password, AUTH_PASSWORD_HASH);
+    } catch (e) {
+      console.error('Provjera lozinke nije uspjela:', e.message);
+    }
+    if (ok) {
+      clearLoginAttempts(ip);
+      req.session.authenticated = true;
+      return req.session.save(() => res.redirect('/'));
+    }
+    recordFailedLogin(ip);
+    res.status(401).type('html').send(renderLoginPage({ error: 'Pogrešna lozinka.' }));
+  });
+
+  app.get('/logout', (req, res) => {
+    req.session?.destroy(() => res.redirect('/login'));
+  });
+  app.post('/logout', (req, res) => {
+    req.session?.destroy(() => res.redirect('/login'));
+  });
+
+  app.get('/api/auth-status', (req, res) => {
+    res.json({ enabled: true, authenticated: !!req.session?.authenticated });
+  });
+
+  // Vrata: sve ostalo (API rute i statični frontend ispod) traži prijavu.
+  app.use((req, res, next) => {
+    if (req.session?.authenticated) return next();
+    if (req.path.startsWith('/api/')) return res.status(401).json({ error: 'Potrebna je prijava.' });
+    res.redirect('/login');
+  });
+} else {
+  app.get('/api/auth-status', (req, res) => res.json({ enabled: false, authenticated: true }));
+}
 
 // ---- Zajednički tečaj bilo_koja_valuta->EUR (koriste ga i cijene metala i
 // cijene dionica) ---- Dohvaća se s api.frankfurter.dev (ECB, bez API ključa,

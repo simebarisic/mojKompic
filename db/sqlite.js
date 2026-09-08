@@ -110,8 +110,9 @@ export async function init() {
       id TEXT PRIMARY KEY,
       kind TEXT NOT NULL,
       month TEXT NOT NULL,
+      location TEXT NOT NULL DEFAULT '',
       quantity REAL NOT NULL,
-      UNIQUE (kind, month)
+      UNIQUE (kind, month, location)
     );
   `);
 
@@ -127,6 +128,29 @@ export async function init() {
   if (!categoryCols.includes('currency')) database.exec('ALTER TABLE categories ADD COLUMN currency TEXT');
   const snapshotValueCols = database.prepare('PRAGMA table_info(snapshot_values)').all().map((c) => c.name);
   if (!snapshotValueCols.includes('quantity')) database.exec('ALTER TABLE snapshot_values ADD COLUMN quantity REAL');
+
+  // Migracija holdings_history na razdiobu po lokacijama (rujan 2026): stari
+  // UNIQUE(kind, month) ne dopušta više unosa za isti mjesec, pa se tablica
+  // mora u cijelosti presložiti (SQLite ne podržava mijenjanje UNIQUE
+  // ograničenja preko ALTER TABLE). Postojeći unosi dobivaju praznu lokaciju
+  // (tretiraju se kao jedan zbirni unos) i ostaju netaknuti.
+  const holdingsCols = database.prepare('PRAGMA table_info(holdings_history)').all().map((c) => c.name);
+  if (!holdingsCols.includes('location')) {
+    database.exec(`
+      ALTER TABLE holdings_history RENAME TO holdings_history_old;
+      CREATE TABLE holdings_history (
+        id TEXT PRIMARY KEY,
+        kind TEXT NOT NULL,
+        month TEXT NOT NULL,
+        location TEXT NOT NULL DEFAULT '',
+        quantity REAL NOT NULL,
+        UNIQUE (kind, month, location)
+      );
+      INSERT INTO holdings_history (id, kind, month, location, quantity)
+        SELECT id, kind, month, '', quantity FROM holdings_history_old;
+      DROP TABLE holdings_history_old;
+    `);
+  }
 }
 
 export async function getState() {
@@ -178,7 +202,7 @@ export async function getState() {
     expenses: expenseRows.filter((r) => r.snapshot_id === s.id).map((r) => ({ id: r.id, label: r.label, amount: r.amount })),
   }));
 
-  const holdingsHistory = database.prepare('SELECT id, kind, month, quantity FROM holdings_history ORDER BY kind, month').all();
+  const holdingsHistory = database.prepare('SELECT id, kind, month, location, quantity FROM holdings_history ORDER BY kind, month, location').all();
 
   return { categories, snapshots, consumptionAssets, metalItems, settings, investments, wealthItems, fiScenarios, holdingsHistory };
 }
@@ -275,8 +299,8 @@ export async function saveState({ categories = [], snapshots = [], consumptionAs
       Number(f.contributionGrowthPct) || 0, Number(f.feePct) || 0, Number(f.expectedPension) || 0, i
     ));
 
-    const insHolding = database.prepare('INSERT INTO holdings_history (id, kind, month, quantity) VALUES (?, ?, ?, ?)');
-    holdingsHistory.forEach((h) => insHolding.run(h.id, h.kind, h.month, Number(h.quantity) || 0));
+    const insHolding = database.prepare('INSERT INTO holdings_history (id, kind, month, location, quantity) VALUES (?, ?, ?, ?, ?)');
+    holdingsHistory.forEach((h) => insHolding.run(h.id, h.kind, h.month, h.location || '', Number(h.quantity) || 0));
   });
 
   writeAll();

@@ -110,10 +110,27 @@ export async function init() {
       id TEXT PRIMARY KEY,
       kind TEXT NOT NULL,
       month TEXT NOT NULL,
+      location TEXT NOT NULL DEFAULT '',
       quantity DOUBLE PRECISION NOT NULL,
-      UNIQUE (kind, month)
+      UNIQUE (kind, month, location)
     );
   `);
+
+  // Migracija holdings_history na razdiobu po lokacijama (rujan 2026):
+  // dodaje stupac "location" ako ne postoji i zamjenjuje stari
+  // UNIQUE(kind, month) ograničenje sa UNIQUE(kind, month, location), tako
+  // da isti mjesec može imati više unosa (npr. po novčaniku/mjenjačnici).
+  // Postojeći unosi zadržavaju praznu lokaciju (jedan zbirni unos).
+  await p.query(`ALTER TABLE holdings_history ADD COLUMN IF NOT EXISTS location TEXT NOT NULL DEFAULT ''`);
+  await p.query(`ALTER TABLE holdings_history DROP CONSTRAINT IF EXISTS holdings_history_kind_month_key`);
+  const { rows: holdingsConstraintRows } = await p.query(
+    `SELECT 1 FROM pg_constraint WHERE conname = 'holdings_history_kind_month_location_key'`
+  );
+  if (holdingsConstraintRows.length === 0) {
+    await p.query(
+      `ALTER TABLE holdings_history ADD CONSTRAINT holdings_history_kind_month_location_key UNIQUE (kind, month, location)`
+    );
+  }
 }
 
 export async function getState() {
@@ -144,7 +161,7 @@ export async function getState() {
     SELECT id, category, item_date AS "itemDate", content
     FROM wealth_items ORDER BY sort_order
   `);
-  const { rows: holdingsRows } = await p.query('SELECT id, kind, month, quantity FROM holdings_history ORDER BY kind, month');
+  const { rows: holdingsRows } = await p.query('SELECT id, kind, month, location, quantity FROM holdings_history ORDER BY kind, month, location');
   const { rows: fiRows } = await p.query(`
     SELECT id, name, current_age AS "currentAge", investing_years AS "investingYears",
            payout_years AS "payoutYears", expected_return_pct AS "expectedReturnPct",
@@ -323,8 +340,8 @@ export async function saveState({ categories = [], snapshots = [], consumptionAs
     }
     for (const h of holdingsHistory) {
       await client.query(
-        'INSERT INTO holdings_history (id, kind, month, quantity) VALUES ($1,$2,$3,$4)',
-        [h.id, h.kind, h.month, Number(h.quantity) || 0]
+        'INSERT INTO holdings_history (id, kind, month, location, quantity) VALUES ($1,$2,$3,$4,$5)',
+        [h.id, h.kind, h.month, h.location || '', Number(h.quantity) || 0]
       );
     }
     await client.query('COMMIT');
