@@ -106,14 +106,34 @@ export async function init() {
       expected_pension REAL NOT NULL DEFAULT 0,
       sort_order INTEGER NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS holdings_history (
+      id TEXT PRIMARY KEY,
+      kind TEXT NOT NULL,
+      month TEXT NOT NULL,
+      quantity REAL NOT NULL,
+      UNIQUE (kind, month)
+    );
   `);
+
+  // Migracija za baze kreirane prije uvođenja "jedinice"/valute po kategoriji
+  // i količine po mjesečnoj stavci - SQLite ne podržava "ADD COLUMN IF NOT
+  // EXISTS", pa se provjerava PRAGMA table_info. NAPOMENA: "unit" i
+  // "quantity" (na snapshot_values) su od rujna 2026. napušteni u korist
+  // zasebnih stranica "Praćenje količine" (vidi holdings_history gore) -
+  // stupci ostaju radi kompatibilnosti sa starim podacima, ali se više ne
+  // pišu/čitaju iz frontenda.
+  const categoryCols = database.prepare('PRAGMA table_info(categories)').all().map((c) => c.name);
+  if (!categoryCols.includes('unit')) database.exec('ALTER TABLE categories ADD COLUMN unit TEXT');
+  if (!categoryCols.includes('currency')) database.exec('ALTER TABLE categories ADD COLUMN currency TEXT');
+  const snapshotValueCols = database.prepare('PRAGMA table_info(snapshot_values)').all().map((c) => c.name);
+  if (!snapshotValueCols.includes('quantity')) database.exec('ALTER TABLE snapshot_values ADD COLUMN quantity REAL');
 }
 
 export async function getState() {
   const database = getDb();
-  const categories = database.prepare('SELECT id, label, grp AS "group" FROM categories ORDER BY sort_order').all();
+  const categories = database.prepare('SELECT id, label, grp AS "group", unit, currency FROM categories ORDER BY sort_order').all();
   const snapshotRows = database.prepare('SELECT id, month FROM snapshots').all();
-  const valueRows = database.prepare('SELECT snapshot_id, category_id, amount FROM snapshot_values').all();
+  const valueRows = database.prepare('SELECT snapshot_id, category_id, amount, quantity FROM snapshot_values').all();
   const incomeRows = database.prepare('SELECT id, snapshot_id, label, amount FROM income_items').all();
   const expenseRows = database.prepare('SELECT id, snapshot_id, label, amount FROM expense_items').all();
   const consumptionAssets = database.prepare(`
@@ -153,33 +173,44 @@ export async function getState() {
     id: s.id,
     month: s.month,
     values: Object.fromEntries(valueRows.filter((v) => v.snapshot_id === s.id).map((v) => [v.category_id, v.amount])),
+    quantities: Object.fromEntries(valueRows.filter((v) => v.snapshot_id === s.id && v.quantity !== null && v.quantity !== undefined).map((v) => [v.category_id, v.quantity])),
     income: incomeRows.filter((r) => r.snapshot_id === s.id).map((r) => ({ id: r.id, label: r.label, amount: r.amount })),
     expenses: expenseRows.filter((r) => r.snapshot_id === s.id).map((r) => ({ id: r.id, label: r.label, amount: r.amount })),
   }));
 
-  return { categories, snapshots, consumptionAssets, metalItems, settings, investments, wealthItems, fiScenarios };
+  const holdingsHistory = database.prepare('SELECT id, kind, month, quantity FROM holdings_history ORDER BY kind, month').all();
+
+  return { categories, snapshots, consumptionAssets, metalItems, settings, investments, wealthItems, fiScenarios, holdingsHistory };
 }
 
-export async function saveState({ categories = [], snapshots = [], consumptionAssets = [], metalItems = [], settings = {}, investments = [], wealthItems = [], fiScenarios = [] }) {
+export async function saveState({ categories = [], snapshots = [], consumptionAssets = [], metalItems = [], settings = {}, investments = [], wealthItems = [], fiScenarios = [], holdingsHistory = [] }) {
   const database = getDb();
   const writeAll = database.transaction(() => {
-    database.exec('DELETE FROM categories; DELETE FROM snapshots; DELETE FROM snapshot_values; DELETE FROM income_items; DELETE FROM expense_items; DELETE FROM consumption_assets; DELETE FROM metal_items; DELETE FROM app_settings; DELETE FROM investments; DELETE FROM wealth_items; DELETE FROM fi_scenarios;');
+    database.exec('DELETE FROM categories; DELETE FROM snapshots; DELETE FROM snapshot_values; DELETE FROM income_items; DELETE FROM expense_items; DELETE FROM consumption_assets; DELETE FROM metal_items; DELETE FROM app_settings; DELETE FROM investments; DELETE FROM wealth_items; DELETE FROM fi_scenarios; DELETE FROM holdings_history;');
 
-    const insCat = database.prepare('INSERT INTO categories (id, label, grp, sort_order) VALUES (?, ?, ?, ?)');
-    categories.forEach((c, i) => insCat.run(c.id, c.label, c.group, i));
+    const insCat = database.prepare('INSERT INTO categories (id, label, grp, sort_order, unit, currency) VALUES (?, ?, ?, ?, ?, ?)');
+    categories.forEach((c, i) => insCat.run(c.id, c.label, c.group, i, c.unit || null, c.currency || null));
 
     const insSnap = database.prepare('INSERT INTO snapshots (id, month) VALUES (?, ?)');
-    const insVal = database.prepare('INSERT INTO snapshot_values (snapshot_id, category_id, amount) VALUES (?, ?, ?)');
+    const insVal = database.prepare('INSERT INTO snapshot_values (snapshot_id, category_id, amount, quantity) VALUES (?, ?, ?, ?)');
     const insInc = database.prepare('INSERT INTO income_items (id, snapshot_id, label, amount) VALUES (?, ?, ?, ?)');
     const insExp = database.prepare('INSERT INTO expense_items (id, snapshot_id, label, amount) VALUES (?, ?, ?, ?)');
 
     snapshots.forEach((s) => {
       insSnap.run(s.id, s.month);
-      Object.entries(s.values || {}).forEach(([catId, amount]) => {
-        if (amount === '' || amount === null || amount === undefined) return;
-        const n = Number(amount);
+      const valueEntries = s.values || {};
+      const qtyEntries = s.quantities || {};
+      const catIds = new Set([...Object.keys(valueEntries), ...Object.keys(qtyEntries)]);
+      catIds.forEach((catId) => {
+        const rawAmount = valueEntries[catId];
+        const rawQty = qtyEntries[catId];
+        const hasAmount = !(rawAmount === '' || rawAmount === null || rawAmount === undefined);
+        const hasQty = !(rawQty === '' || rawQty === null || rawQty === undefined);
+        if (!hasAmount && !hasQty) return;
+        const n = hasAmount ? Number(rawAmount) : 0;
         if (Number.isNaN(n)) return;
-        insVal.run(s.id, catId, n);
+        const q = hasQty ? Number(rawQty) : null;
+        insVal.run(s.id, catId, n, Number.isNaN(q) ? null : q);
       });
       (s.income || []).forEach((r) => insInc.run(r.id, s.id, r.label || '', Number(r.amount) || 0));
       (s.expenses || []).forEach((r) => insExp.run(r.id, s.id, r.label || '', Number(r.amount) || 0));
@@ -243,6 +274,9 @@ export async function saveState({ categories = [], snapshots = [], consumptionAs
       Number(f.expectedReturnPct) || 0, Number(f.currentCapital) || 0, Number(f.monthlyContribution) || 0,
       Number(f.contributionGrowthPct) || 0, Number(f.feePct) || 0, Number(f.expectedPension) || 0, i
     ));
+
+    const insHolding = database.prepare('INSERT INTO holdings_history (id, kind, month, quantity) VALUES (?, ?, ?, ?)');
+    holdingsHistory.forEach((h) => insHolding.run(h.id, h.kind, h.month, Number(h.quantity) || 0));
   });
 
   writeAll();

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import {
-  AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell,
+  AreaChart, Area, BarChart, Bar, LineChart, Line, PieChart, Pie, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend
 } from 'recharts';
 import {
@@ -8,7 +8,7 @@ import {
   CreditCard, Copy, LayoutGrid, PencilLine, History as HistoryIcon,
   Settings2, Save, ArrowRight, Landmark, PieChart as PieChartIcon, Layers, Car,
   Eye, EyeOff, Coins, RefreshCw, AlertTriangle, Briefcase, RotateCcw, ChevronDown, ChevronUp, Gem, GripVertical, Target,
-  Menu, X
+  Menu, X, Bitcoin
 } from 'lucide-react';
 
 /* ---------- design tokens ---------- */
@@ -360,6 +360,13 @@ const DEFAULT_CATEGORIES = [
   { id: 'poljica', label: 'Poljica (zemljište)', group: 'realestate' },
 ];
 
+// Valute u kojima se, uz zadanu EUR, može voditi vrijednost pojedine
+// kategorije u mjesečnom Unosu (npr. USD račun) - unosi se u toj valuti,
+// a odmah se pretvara u EUR po trenutnom tečaju (vidi useFxRate/setForeignVal
+// u Entry) i SAMO se ta EUR protuvrijednost trajno sprema (izvorni iznos u
+// stranoj valuti se ne pamti posebno - isti pristup kao kod Ulaganja).
+const ENTRY_CURRENCIES = ['EUR', 'USD'];
+
 const MONTHS_HR = ['sij', 'velj', 'ožu', 'tra', 'svi', 'lip', 'srp', 'kol', 'ruj', 'lis', 'stu', 'pro'];
 const MONTHS_HR_FULL = ['Siječanj', 'Veljača', 'Ožujak', 'Travanj', 'Svibanj', 'Lipanj', 'Srpanj', 'Kolovoz', 'Rujan', 'Listopad', 'Studeni', 'Prosinac'];
 
@@ -459,6 +466,13 @@ const NAV_SECTIONS = [
       { id: 'plemenitiMetali', label: 'Plemeniti metali', icon: Coins },
       { id: 'ulaganja', label: 'Ulaganja', icon: Briefcase },
       { id: 'generacijskoBogatstvo', label: 'Generacijsko bogatstvo', icon: Gem },
+    ],
+  },
+  {
+    label: 'Praćenje količine', items: [
+      { id: 'pratiBitcoin', label: 'Bitcoin', icon: Bitcoin },
+      { id: 'pratiZlato', label: 'Zlato', icon: Coins },
+      { id: 'pratiSrebro', label: 'Srebro', icon: Coins },
     ],
   },
   {
@@ -749,6 +763,25 @@ function Entry({ draft, setDraft, categories, previous, sorted, onSave, onStartD
   const setVal = (id, v) => setDraft({ ...draft, values: { ...draft.values, [id]: v } });
   const t = computeTotals(draft, categories);
 
+  // Tečaj za kategorije s valutom USD (vidi ENTRY_CURRENCIES) - dohvaća se
+  // uvijek (jeftin, keširan poziv), koristi se samo ako neka kategorija
+  // stvarno ima currency 'USD'.
+  const usdFx = useFxRate('USD');
+
+  // Vrijednost strane valute (npr. USD) se upisuje odvojeno od draft.values
+  // (koji ostaje EUR "izvor istine" za sve zbrojeve/grafove nepromijenjen) -
+  // draft.valueInputs pamti TOČNO ono što je upisano, u toj valuti, dok se
+  // draft.values[id] uvijek drži kao EUR protuvrijednost po trenutnom tečaju
+  // u trenutku upisa. Nakon spremanja/reloada draft.valueInputs se gubi (nije
+  // dio DB sheme - namjerno, vidi ENTRY_CURRENCIES komentar) pa se pri
+  // ponovnom uređivanju polje ponovno predlaže iz EUR-a po TADAŠNJEM tečaju.
+  const setForeignVal = (c, v) => {
+    const num = Number(v);
+    const validNum = v !== '' && !Number.isNaN(num);
+    const eur = v === '' ? '' : (validNum && usdFx.rate ? num * usdFx.rate : draft.values[c.id]);
+    setDraft({ ...draft, valueInputs: { ...draft.valueInputs, [c.id]: v }, values: { ...draft.values, [c.id]: eur } });
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex justify-end">
@@ -764,7 +797,7 @@ function Entry({ draft, setDraft, categories, previous, sorted, onSave, onStartD
               {Array.from({ length: 7 }, (_, i) => new Date().getFullYear() - 2 + i).map((yy) => <option key={yy} value={yy}>{yy}</option>)}
             </select>
             {previous && (
-              <button onClick={() => { const src = sorted[sorted.length - 1]; setDraft({ ...draft, values: { ...src.values } }); }}
+              <button onClick={() => { const src = sorted[sorted.length - 1]; setDraft({ ...draft, values: { ...src.values }, valueInputs: {} }); }}
                 className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-md" style={{ color: C.textMuted, border: `1px solid ${C.border}` }}>
                 <Copy size={13} /> Kopiraj iz {monthLabel(sorted[sorted.length - 1].month)}
               </button>
@@ -789,13 +822,28 @@ function Entry({ draft, setDraft, categories, previous, sorted, onSave, onStartD
               </div>
               {g === 'offbalance' && <div className="text-xs mb-2" style={{ color: C.textFaint }}>{OFFBALANCE_NOTE}</div>}
               <div className="space-y-2 mt-2">
-                {cats.map((c) => (
-                  <div key={c.id} className="flex items-center justify-between gap-3 py-1.5" style={{ borderBottom: `1px dashed ${C.borderSoft}` }}>
-                    <span className="text-sm" style={{ color: C.textMuted }}>{c.label}</span>
-                    <input type="number" value={draft.values[c.id] ?? ''} onChange={(e) => setVal(c.id, e.target.value)} placeholder="0"
-                      className="w-28 text-sm rounded-md px-2.5 py-1 text-right" style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.text, fontVariantNumeric: 'tabular-nums', filter: hide ? 'blur(5px)' : 'none' }} />
-                  </div>
-                ))}
+                {cats.map((c) => {
+                  const inputStyle = { background: C.surface, border: `1px solid ${C.border}`, color: C.textMuted, fontVariantNumeric: 'tabular-nums', filter: hide ? 'blur(5px)' : 'none' };
+                  const isForeignCurrency = c.currency && c.currency !== 'EUR';
+                  const usdDisplay = draft.valueInputs?.[c.id] ?? (usdFx.rate && draft.values[c.id] ? String(Math.round((Number(draft.values[c.id]) / usdFx.rate) * 100) / 100) : '');
+                  return (
+                    <div key={c.id} className="flex items-center justify-between gap-3 py-1.5" style={{ borderBottom: `1px dashed ${C.borderSoft}` }}>
+                      <span className="text-sm" style={{ color: C.textMuted }}>{c.label}</span>
+                      {isForeignCurrency ? (
+                        <div className="flex items-center gap-1">
+                          <span className="text-xs" style={{ color: C.textFaint }}>{c.currency}</span>
+                          <input type="number" value={usdDisplay} onChange={(e) => setForeignVal(c, e.target.value)} placeholder="0"
+                            title={usdFx.rate ? `Tečaj: 1 ${c.currency} ≈ ${usdFx.rate.toFixed(4)} EUR` : 'Tečaj se učitava…'}
+                            className="w-24 text-sm rounded-md px-2.5 py-1 text-right" style={{ ...inputStyle, color: C.text }} />
+                          <span className="text-xs w-16" style={{ color: C.textFaint }}>≈ {fmt0(Number(draft.values[c.id] || 0))} €</span>
+                        </div>
+                      ) : (
+                        <input type="number" value={draft.values[c.id] ?? ''} onChange={(e) => setVal(c.id, e.target.value)} placeholder="0 €" title="Vrijednost u eurima"
+                          className="w-28 text-sm rounded-md px-2.5 py-1 text-right" style={{ ...inputStyle, color: C.text }} />
+                      )}
+                    </div>
+                  );
+                })}
                 {cats.length === 0 && <div className="text-xs" style={{ color: C.textFaint }}>Nema stavki u ovoj grupi — dodaj ih u Kategorijama.</div>}
               </div>
             </Card>
@@ -894,6 +942,11 @@ function CategoriesTab({ categories, setCategories, hide, onToggleHide }) {
                 <div key={c.id} className="flex items-center gap-2">
                   <input value={c.label} onChange={(e) => setCategories((prev) => prev.map((x) => x.id === c.id ? { ...x, label: e.target.value } : x))}
                     className="flex-1 text-sm rounded-md px-2.5 py-1.5" style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.text }} />
+                  <select value={c.currency || 'EUR'} onChange={(e) => setCategories((prev) => prev.map((x) => x.id === c.id ? { ...x, currency: e.target.value } : x))}
+                    title="Valuta u kojoj se unosi vrijednost ove kategorije u mjesečnom Unosu — kod strane valute se odmah pretvara i sprema u EUR po trenutnom tečaju"
+                    className="text-sm rounded-md px-1.5 py-1.5" style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.textMuted }}>
+                    {ENTRY_CURRENCIES.map((cur) => <option key={cur} value={cur}>{cur}</option>)}
+                  </select>
                   <button
                     onClick={() => {
                       const ok = window.confirm(`Ukloniti kategoriju "${c.label}"? Njeni povijesni iznosi u svim mjesecima postat će nevidljivi/izgubljeni u prikazu, i ova radnja se ne može poništiti.`);
@@ -1392,6 +1445,33 @@ function useMetalPrices() {
   return { prices, loading, error, refresh };
 }
 
+// Dohvaća trenutni tečaj valuta -> EUR (za kategorije s valutom USD u Unosu,
+// vidi ENTRY_FOREIGN_CURRENCIES niže) s backenda (/api/fx-rate). Isti uzorak
+// keširanja/fallbacka kao useMetalPrices gore.
+function useFxRate(currency) {
+  const [rate, setRate] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  const refresh = async () => {
+    setLoading(true);
+    try {
+      const res = await fetch(`/api/fx-rate?currency=${encodeURIComponent(currency)}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Dohvat tečaja nije uspio.');
+      setRate(Number(data.rate));
+      setError('');
+    } catch (e) {
+      setError(e.message || 'Dohvat tečaja nije uspio.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { refresh(); }, [currency]);
+  return { rate, loading, error, refresh };
+}
+
 function MetalPricePanel({ prices, loading, error, onRefresh, overrides, setOverrides }) {
   const goldLive = prices?.gold?.eurPerGram ?? null;
   const silverLive = prices?.silver?.eurPerGram ?? null;
@@ -1665,6 +1745,190 @@ function PreciousMetals({ metalItems, setMetalItems, priceOverrides, setPriceOve
       {metalItems.length === 0 && !adding && (
         <Card style={{ padding: '32px', textAlign: 'center' }}>
           <p className="text-sm" style={{ color: C.textMuted }}>Nema unesenih stavki. Dodaj zlatnike, zlatne poluge, srebrnjake ili srebrne poluge — vrijednost se računa automatski prema trenutnoj tržišnoj cijeni.</p>
+        </Card>
+      )}
+    </div>
+  );
+}
+
+// Zasebno praćenje "u jedinicama" (BTC / grami) kroz mjesece - namjerno POSVE
+// ODVOJENO od kategorija/Unosa/neto vrijednosti (vidi holdingsHistory u App):
+// nema automatskog eurskog izračuna, samo količina po mjesecu + graf kretanja.
+// Za Bitcoin dodatno nudi upareno polje za satošije (unos u bilo koje od dva
+// polja odmah preračunava drugo). Jedna instanca komponente po vrsti
+// (kind: 'bitcoin' | 'gold' | 'silver') - vidi tabove niže u App().
+function HoldingsTrackerTab({ kind, label, unit, color, decimals = 2, allowSats = false, holdingsHistory, setHoldingsHistory, hide, onToggleHide }) {
+  const entries = useMemo(
+    () => holdingsHistory.filter((h) => h.kind === kind).sort((a, b) => a.month.localeCompare(b.month)),
+    [holdingsHistory, kind]
+  );
+  const latest = entries[entries.length - 1];
+  const previous = entries[entries.length - 2];
+  const change = latest && previous ? latest.quantity - previous.quantity : null;
+
+  const [month, setMonth] = useState(thisMonthStr());
+  const [qtyInput, setQtyInput] = useState('');
+  const [satInput, setSatInput] = useState('');
+  const [y, mo] = month.split('-').map(Number);
+
+  const fmtQty = (n) => new Intl.NumberFormat('hr-HR', { maximumFractionDigits: decimals }).format(n || 0);
+
+  const onQtyChange = (v) => {
+    setQtyInput(v);
+    if (!allowSats) return;
+    const n = Number(v);
+    setSatInput(v === '' || Number.isNaN(n) ? '' : String(Math.round(n * 100000000)));
+  };
+  const onSatChange = (v) => {
+    setSatInput(v);
+    const n = Number(v);
+    setQtyInput(v === '' || Number.isNaN(n) ? '' : String(n / 100000000));
+  };
+
+  const handleSave = () => {
+    const n = Number(qtyInput);
+    if (qtyInput === '' || Number.isNaN(n)) return;
+    const existing = entries.find((h) => h.month === month);
+    if (existing && existing.quantity !== n) {
+      const ok = window.confirm(`Za ${monthLabelFull(month)} već postoji unesena količina (${fmtQty(existing.quantity)} ${unit}). Prebrisati?`);
+      if (!ok) return;
+    }
+    setHoldingsHistory((prev) => {
+      const idx = prev.findIndex((h) => h.kind === kind && h.month === month);
+      if (idx >= 0) {
+        const copy = [...prev];
+        copy[idx] = { ...copy[idx], quantity: n };
+        return copy;
+      }
+      return [...prev, { id: uid(), kind, month, quantity: n }];
+    });
+    setQtyInput(''); setSatInput('');
+  };
+
+  const handleEdit = (h) => {
+    setMonth(h.month);
+    setQtyInput(String(h.quantity));
+    if (allowSats) setSatInput(String(Math.round(h.quantity * 100000000)));
+  };
+
+  const handleDelete = (h) => {
+    const ok = window.confirm(`Obrisati unos za ${monthLabelFull(h.month)}? Ova radnja se ne može poništiti.`);
+    if (ok) setHoldingsHistory((prev) => prev.filter((x) => x.id !== h.id));
+  };
+
+  const chartData = entries.map((h) => ({ month: monthLabel(h.month), qty: h.quantity }));
+
+  return (
+    <div className="space-y-6">
+      <div className="flex justify-end">
+        <PrivacyButton on={hide} onToggle={onToggleHide} label="količine na ovoj stranici" />
+      </div>
+
+      <Card style={{ padding: '20px 24px' }}>
+        <div className="text-xs uppercase tracking-wide" style={{ color: C.textFaint, letterSpacing: '0.08em' }}>{label} · trenutna količina</div>
+        <div style={{ fontFamily: 'Georgia, "Iowan Old Style", serif', fontSize: 34, color: C.text, fontVariantNumeric: 'tabular-nums', lineHeight: 1.2 }}>
+          {!latest ? '—' : (hide ? MASK : `${fmtQty(latest.quantity)} ${unit}`)}
+        </div>
+        {latest && allowSats && !hide && (
+          <div className="text-xs mt-0.5" style={{ color: C.textFaint }}>≈ {fmtQty(Math.round(latest.quantity * 100000000)).replace(/,00$/, '')} sat</div>
+        )}
+        {change !== null && (
+          <div className="text-sm mt-1" style={{ color: change >= 0 ? C.tealSoft : C.rust }}>
+            {change >= 0 ? '+' : ''}{hide ? MASK : `${fmtQty(change)} ${unit}`} u odnosu na {monthLabel(previous.month)}
+          </div>
+        )}
+        {!latest && <div className="text-sm mt-1" style={{ color: C.textMuted }}>Još nema unesenih mjeseci.</div>}
+      </Card>
+
+      <Card style={{ padding: '18px 20px' }}>
+        <div className="text-sm font-semibold mb-3" style={{ color: C.text }}>Unos količine</div>
+        <div className="flex flex-wrap items-end gap-3">
+          <div>
+            <div className="text-xs mb-1" style={{ color: C.textFaint }}>Mjesec</div>
+            <div className="flex items-center gap-1.5">
+              <select value={mo} onChange={(e) => setMonth(`${y}-${String(Number(e.target.value)).padStart(2, '0')}`)}
+                className="text-sm rounded-md px-2.5 py-1.5" style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.text }}>
+                {MONTHS_HR_FULL.map((m, i) => <option key={i} value={i + 1}>{m}</option>)}
+              </select>
+              <select value={y} onChange={(e) => setMonth(`${e.target.value}-${String(mo).padStart(2, '0')}`)}
+                className="text-sm rounded-md px-2.5 py-1.5" style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.text }}>
+                {Array.from({ length: 7 }, (_, i) => new Date().getFullYear() - 2 + i).map((yy) => <option key={yy} value={yy}>{yy}</option>)}
+              </select>
+            </div>
+          </div>
+          <div>
+            <div className="text-xs mb-1" style={{ color: C.textFaint }}>Količina ({unit})</div>
+            <input type="number" step="any" value={qtyInput} onChange={(e) => onQtyChange(e.target.value)} placeholder={`0 ${unit}`}
+              className="w-36 text-sm rounded-md px-2.5 py-1.5 text-right" style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.text, fontVariantNumeric: 'tabular-nums' }} />
+          </div>
+          {allowSats && (
+            <div>
+              <div className="text-xs mb-1" style={{ color: C.textFaint }}>= satoshi</div>
+              <input type="number" step="1" value={satInput} onChange={(e) => onSatChange(e.target.value)} placeholder="0 sat"
+                className="w-40 text-sm rounded-md px-2.5 py-1.5 text-right" style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.textMuted, fontVariantNumeric: 'tabular-nums' }} />
+            </div>
+          )}
+          <button onClick={handleSave} className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-md text-sm font-semibold" style={{ background: C.goldSoft, color: C.bg }}>
+            <Save size={14} /> Spremi
+          </button>
+        </div>
+      </Card>
+
+      {entries.length > 0 && (
+        <Card style={{ padding: '20px 20px 8px' }}>
+          <div className="text-sm font-semibold mb-3" style={{ color: C.text }}>Kretanje kroz mjesece</div>
+          <ChartMask on={hide}>
+            <ResponsiveContainer width="100%" height={220}>
+              <LineChart data={chartData} margin={{ left: -10, right: 10 }}>
+                <CartesianGrid stroke={C.borderSoft} vertical={false} />
+                <XAxis dataKey="month" stroke={C.textFaint} tick={{ fontSize: 12 }} axisLine={{ stroke: C.border }} tickLine={false} />
+                <YAxis stroke={C.textFaint} tick={{ fontSize: 11 }} axisLine={false} tickLine={false} width={54} domain={entries.length === 1 ? ['dataMin', 'dataMax'] : undefined} allowDecimals />
+                <Tooltip contentStyle={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12 }} formatter={(v) => [`${fmtQty(v)} ${unit}`, label]} />
+                <Line type="monotone" dataKey="qty" stroke={color} strokeWidth={2} dot={{ r: 3 }} name="qty" />
+              </LineChart>
+            </ResponsiveContainer>
+          </ChartMask>
+          {entries.length === 1 && (
+            <div className="text-xs text-center pb-3" style={{ color: C.textFaint }}>Graf postaje čitljiviji s barem 2 unesena mjeseca.</div>
+          )}
+        </Card>
+      )}
+
+      {entries.length > 0 ? (
+        <Card style={{ overflow: 'hidden' }}>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm" style={{ borderCollapse: 'collapse' }}>
+              <thead>
+                <tr style={{ borderBottom: `1px solid ${C.border}`, color: C.textFaint, textAlign: 'left' }}>
+                  <th className="px-4 py-3 font-medium">Mjesec</th>
+                  <th className="px-4 py-3 font-medium text-right">Količina</th>
+                  {allowSats && <th className="px-4 py-3 font-medium text-right">Satoshi</th>}
+                  <th className="px-4 py-3 font-medium text-right"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {[...entries].reverse().map((h) => (
+                  <tr key={h.id} style={{ borderBottom: `1px solid ${C.borderSoft}` }}>
+                    <td className="px-4 py-2.5" style={{ color: C.text }}>{monthLabelFull(h.month)}</td>
+                    <td className="px-4 py-2.5 text-right" style={{ color: C.text, fontVariantNumeric: 'tabular-nums', filter: hide ? 'blur(5px)' : 'none' }}>{fmtQty(h.quantity)} {unit}</td>
+                    {allowSats && (
+                      <td className="px-4 py-2.5 text-right" style={{ color: C.textFaint, fontVariantNumeric: 'tabular-nums', filter: hide ? 'blur(5px)' : 'none' }}>
+                        {new Intl.NumberFormat('hr-HR').format(Math.round(h.quantity * 100000000))}
+                      </td>
+                    )}
+                    <td className="px-4 py-2.5 text-right whitespace-nowrap">
+                      <button onClick={() => handleEdit(h)} className="p-1.5 rounded" style={{ color: C.textMuted }}><PencilLine size={14} /></button>
+                      <button onClick={() => handleDelete(h)} className="p-1.5 rounded" style={{ color: C.textFaint }}><Trash2 size={14} /></button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      ) : (
+        <Card style={{ padding: 32, textAlign: 'center' }}>
+          <p className="text-sm" style={{ color: C.textMuted }}>Još nema unesenih mjeseci — upiši prvu količinu gore.</p>
         </Card>
       )}
     </div>
@@ -2593,6 +2857,7 @@ export default function App() {
   const [investments, setInvestments] = useState([]);
   const [wealthItems, setWealthItems] = useState([]);
   const [fiScenarios, setFiScenarios] = useState([]);
+  const [holdingsHistory, setHoldingsHistory] = useState([]);
   const [settings, setSettings] = useState({});
   const priceOverrides = { goldEurPerGram: settings.goldEurPerGram ?? '', silverEurPerGram: settings.silverEurPerGram ?? '' };
   const setPriceOverrides = (next) => setSettings((prev) => ({ ...prev, goldEurPerGram: next.goldEurPerGram, silverEurPerGram: next.silverEurPerGram }));
@@ -2614,7 +2879,7 @@ export default function App() {
   const [pagePrivacy, setPagePrivacy] = useState({
     pregled: false, unos: false, povijest: false, kategorije: false,
     diverzifikacija: false, vrstaImovine: false, potrosnaImovina: false, plemenitiMetali: false, ulaganja: false,
-    financijskaNeovisnost: false,
+    financijskaNeovisnost: false, pratiBitcoin: false, pratiZlato: false, pratiSrebro: false,
   });
   const allPrivacyOn = Object.values(pagePrivacy).every(Boolean);
   const toggleAllPrivacy = () => {
@@ -2643,6 +2908,7 @@ export default function App() {
         if (parsed.investments) setInvestments(parsed.investments);
         if (parsed.wealthItems) setWealthItems(parsed.wealthItems);
         if (parsed.fiScenarios) setFiScenarios(parsed.fiScenarios);
+        if (parsed.holdingsHistory) setHoldingsHistory(parsed.holdingsHistory);
         setLoaded(true);
       } catch (e) {
         if (cancelled) return;
@@ -2670,7 +2936,7 @@ export default function App() {
             // ovdje je uvijek namjerno (korisnik je stvarno obrisao sve).
             'X-Confirm-Wipe': snapshots.length === 0 ? 'true' : 'false',
           },
-          body: JSON.stringify({ categories, snapshots, consumptionAssets, metalItems, settings, investments, wealthItems, fiScenarios }),
+          body: JSON.stringify({ categories, snapshots, consumptionAssets, metalItems, settings, investments, wealthItems, fiScenarios, holdingsHistory }),
         });
         if (!res.ok) throw new Error('save failed');
       } catch (e) {
@@ -2678,7 +2944,7 @@ export default function App() {
         setTimeout(() => setNotice(''), 4500);
       }
     })();
-  }, [categories, snapshots, consumptionAssets, metalItems, settings, investments, wealthItems, fiScenarios, loaded]);
+  }, [categories, snapshots, consumptionAssets, metalItems, settings, investments, wealthItems, fiScenarios, holdingsHistory, loaded]);
 
   const sorted = useMemo(() => [...snapshots].sort((a, b) => a.month.localeCompare(b.month)), [snapshots]);
 
@@ -2854,6 +3120,27 @@ export default function App() {
         )}
         {tab === 'generacijskoBogatstvo' && (
           <GenerationalWealth wealthItems={wealthItems} setWealthItems={setWealthItems} />
+        )}
+        {tab === 'pratiBitcoin' && (
+          <HoldingsTrackerTab
+            kind="bitcoin" label="Bitcoin" unit="BTC" color="#e8934a" decimals={8} allowSats
+            holdingsHistory={holdingsHistory} setHoldingsHistory={setHoldingsHistory}
+            hide={pagePrivacy.pratiBitcoin} onToggleHide={() => togglePagePrivacy('pratiBitcoin')}
+          />
+        )}
+        {tab === 'pratiZlato' && (
+          <HoldingsTrackerTab
+            kind="gold" label="Zlato" unit="g" color={C.gold} decimals={3}
+            holdingsHistory={holdingsHistory} setHoldingsHistory={setHoldingsHistory}
+            hide={pagePrivacy.pratiZlato} onToggleHide={() => togglePagePrivacy('pratiZlato')}
+          />
+        )}
+        {tab === 'pratiSrebro' && (
+          <HoldingsTrackerTab
+            kind="silver" label="Srebro" unit="g" color="#b8bec7" decimals={3}
+            holdingsHistory={holdingsHistory} setHoldingsHistory={setHoldingsHistory}
+            hide={pagePrivacy.pratiSrebro} onToggleHide={() => togglePagePrivacy('pratiSrebro')}
+          />
         )}
         {tab === 'financijskaNeovisnost' && (
           <FinancialIndependence

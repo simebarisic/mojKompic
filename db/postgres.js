@@ -29,6 +29,9 @@ export async function init() {
       amount DOUBLE PRECISION NOT NULL,
       PRIMARY KEY (snapshot_id, category_id)
     );
+    ALTER TABLE snapshot_values ADD COLUMN IF NOT EXISTS quantity DOUBLE PRECISION;
+    ALTER TABLE categories ADD COLUMN IF NOT EXISTS unit TEXT;
+    ALTER TABLE categories ADD COLUMN IF NOT EXISTS currency TEXT;
     CREATE TABLE IF NOT EXISTS income_items (
       id TEXT PRIMARY KEY,
       snapshot_id TEXT NOT NULL,
@@ -103,14 +106,21 @@ export async function init() {
       expected_pension DOUBLE PRECISION NOT NULL DEFAULT 0,
       sort_order INTEGER NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS holdings_history (
+      id TEXT PRIMARY KEY,
+      kind TEXT NOT NULL,
+      month TEXT NOT NULL,
+      quantity DOUBLE PRECISION NOT NULL,
+      UNIQUE (kind, month)
+    );
   `);
 }
 
 export async function getState() {
   const p = getPool();
-  const { rows: categories } = await p.query('SELECT id, label, grp AS "group" FROM categories ORDER BY sort_order');
+  const { rows: categories } = await p.query('SELECT id, label, grp AS "group", unit, currency FROM categories ORDER BY sort_order');
   const { rows: snapshotRows } = await p.query('SELECT id, month FROM snapshots');
-  const { rows: valueRows } = await p.query('SELECT snapshot_id, category_id, amount FROM snapshot_values');
+  const { rows: valueRows } = await p.query('SELECT snapshot_id, category_id, amount, quantity FROM snapshot_values');
   const { rows: incomeRows } = await p.query('SELECT id, snapshot_id, label, amount FROM income_items');
   const { rows: expenseRows } = await p.query('SELECT id, snapshot_id, label, amount FROM expense_items');
   const { rows: consumptionRows } = await p.query(`
@@ -134,6 +144,7 @@ export async function getState() {
     SELECT id, category, item_date AS "itemDate", content
     FROM wealth_items ORDER BY sort_order
   `);
+  const { rows: holdingsRows } = await p.query('SELECT id, kind, month, quantity FROM holdings_history ORDER BY kind, month');
   const { rows: fiRows } = await p.query(`
     SELECT id, name, current_age AS "currentAge", investing_years AS "investingYears",
            payout_years AS "payoutYears", expected_return_pct AS "expectedReturnPct",
@@ -147,6 +158,7 @@ export async function getState() {
     id: s.id,
     month: s.month,
     values: Object.fromEntries(valueRows.filter((v) => v.snapshot_id === s.id).map((v) => [v.category_id, Number(v.amount)])),
+    quantities: Object.fromEntries(valueRows.filter((v) => v.snapshot_id === s.id && v.quantity !== null && v.quantity !== undefined).map((v) => [v.category_id, Number(v.quantity)])),
     income: incomeRows.filter((r) => r.snapshot_id === s.id).map((r) => ({ id: r.id, label: r.label, amount: Number(r.amount) })),
     expenses: expenseRows.filter((r) => r.snapshot_id === s.id).map((r) => ({ id: r.id, label: r.label, amount: Number(r.amount) })),
   }));
@@ -193,10 +205,12 @@ export async function getState() {
     expectedPension: Number(f.expectedPension),
   }));
 
-  return { categories, snapshots, consumptionAssets, metalItems, settings, investments, wealthItems, fiScenarios };
+  const holdingsHistory = holdingsRows.map((h) => ({ ...h, quantity: Number(h.quantity) }));
+
+  return { categories, snapshots, consumptionAssets, metalItems, settings, investments, wealthItems, fiScenarios, holdingsHistory };
 }
 
-export async function saveState({ categories = [], snapshots = [], consumptionAssets = [], metalItems = [], settings = {}, investments = [], wealthItems = [], fiScenarios = [] }) {
+export async function saveState({ categories = [], snapshots = [], consumptionAssets = [], metalItems = [], settings = {}, investments = [], wealthItems = [], fiScenarios = [], holdingsHistory = [] }) {
   const p = getPool();
   const client = await p.connect();
   try {
@@ -212,18 +226,27 @@ export async function saveState({ categories = [], snapshots = [], consumptionAs
     await client.query('DELETE FROM investments');
     await client.query('DELETE FROM wealth_items');
     await client.query('DELETE FROM fi_scenarios');
+    await client.query('DELETE FROM holdings_history');
 
     for (let i = 0; i < categories.length; i++) {
       const c = categories[i];
-      await client.query('INSERT INTO categories (id, label, grp, sort_order) VALUES ($1,$2,$3,$4)', [c.id, c.label, c.group, i]);
+      await client.query('INSERT INTO categories (id, label, grp, sort_order, unit, currency) VALUES ($1,$2,$3,$4,$5,$6)', [c.id, c.label, c.group, i, c.unit || null, c.currency || null]);
     }
     for (const s of snapshots) {
       await client.query('INSERT INTO snapshots (id, month) VALUES ($1,$2)', [s.id, s.month]);
-      for (const [catId, amount] of Object.entries(s.values || {})) {
-        if (amount === '' || amount === null || amount === undefined) continue;
-        const n = Number(amount);
+      const valueEntries = s.values || {};
+      const qtyEntries = s.quantities || {};
+      const catIds = new Set([...Object.keys(valueEntries), ...Object.keys(qtyEntries)]);
+      for (const catId of catIds) {
+        const rawAmount = valueEntries[catId];
+        const rawQty = qtyEntries[catId];
+        const hasAmount = !(rawAmount === '' || rawAmount === null || rawAmount === undefined);
+        const hasQty = !(rawQty === '' || rawQty === null || rawQty === undefined);
+        if (!hasAmount && !hasQty) continue;
+        const n = hasAmount ? Number(rawAmount) : 0;
         if (Number.isNaN(n)) continue;
-        await client.query('INSERT INTO snapshot_values (snapshot_id, category_id, amount) VALUES ($1,$2,$3)', [s.id, catId, n]);
+        const q = hasQty ? Number(rawQty) : null;
+        await client.query('INSERT INTO snapshot_values (snapshot_id, category_id, amount, quantity) VALUES ($1,$2,$3,$4)', [s.id, catId, n, Number.isNaN(q) ? null : q]);
       }
       for (const r of s.income || []) {
         await client.query('INSERT INTO income_items (id, snapshot_id, label, amount) VALUES ($1,$2,$3,$4)', [r.id, s.id, r.label || '', Number(r.amount) || 0]);
@@ -296,6 +319,12 @@ export async function saveState({ categories = [], snapshots = [], consumptionAs
           Number(f.expectedReturnPct) || 0, Number(f.currentCapital) || 0, Number(f.monthlyContribution) || 0,
           Number(f.contributionGrowthPct) || 0, Number(f.feePct) || 0, Number(f.expectedPension) || 0, i,
         ]
+      );
+    }
+    for (const h of holdingsHistory) {
+      await client.query(
+        'INSERT INTO holdings_history (id, kind, month, quantity) VALUES ($1,$2,$3,$4)',
+        [h.id, h.kind, h.month, Number(h.quantity) || 0]
       );
     }
     await client.query('COMMIT');

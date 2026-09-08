@@ -229,6 +229,25 @@ app.get('/api/metal-prices', async (req, res) => {
   }
 });
 
+// Tečaj valuta -> EUR za kategorije s valutom != EUR u mjesečnom "Unosu"
+// (npr. USD). Koristi isti keš/izvor (frankfurter.dev) kao cijene metala i
+// ulaganja - vidi getFxRateToEur gore. Kod pada izvora vraća zadnji poznati
+// tečaj iz keša (bolje star nego nikakav), isto kao /api/metal-prices.
+app.get('/api/fx-rate', async (req, res) => {
+  const currency = (req.query.currency || 'USD').toString().toUpperCase();
+  try {
+    const fx = await getFxRateToEur(currency);
+    res.json({ currency, rate: fx.rate, date: fx.date, stale: false });
+  } catch (e) {
+    console.error(`Dohvat tečaja za "${currency}" nije uspio:`, e.message);
+    const stale = fxRateCache.get(currency);
+    if (stale) {
+      return res.json({ currency, rate: stale.rate, date: stale.date, stale: true });
+    }
+    res.status(502).json({ error: `Ne mogu dohvatiti tečaj za valutu "${currency}". Pokušaj kasnije.` });
+  }
+});
+
 app.get('/api/state', async (req, res) => {
   try {
     res.json(await db.getState());
