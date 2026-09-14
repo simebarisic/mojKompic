@@ -373,10 +373,40 @@ const MONTHS_HR_FULL = ['Siječanj', 'Veljača', 'Ožujak', 'Travanj', 'Svibanj'
 const uid = () => Math.random().toString(36).slice(2, 9);
 
 // Pretvara jednostavan markdown unutar "Sadržaj" polja (tab "Generacijsko
-// bogatstvo") u prikaz s klikabilnim linkovima - podržava samo [tekst](url)
-// po retku (dovoljno za popis poveznica na proizvode), bez pune markdown
-// biblioteke. Svaki redak unosa postaje zaseban red u prikazu.
+// bogatstvo") u prikaz s klikabilnim linkovima - podržava [tekst](url) po
+// retku, a ako link nije omotan u zagrade (samo zalijepljen "goli" URL),
+// prepozna ga i sam mu doda naziv (domenu stranice, bez "www."), bez pune
+// markdown biblioteke. Svaki redak unosa postaje zaseban red u prikazu.
 const MARKDOWN_LINK_RE = /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g;
+const BARE_URL_RE = /(https?:\/\/[^\s)]+)/g;
+const BARE_URL_ONLY_RE = /^https?:\/\/\S+$/;
+const urlLabel = (url) => {
+  try {
+    return new URL(url).hostname.replace(/^www\./, '');
+  } catch {
+    return url;
+  }
+};
+const renderBareLinks = (text, keyPrefix) => {
+  const parts = [];
+  let lastIndex = 0;
+  let m;
+  let i = 0;
+  BARE_URL_RE.lastIndex = 0;
+  while ((m = BARE_URL_RE.exec(text))) {
+    if (m.index > lastIndex) parts.push(text.slice(lastIndex, m.index));
+    const url = m[1];
+    parts.push(
+      <a key={`${keyPrefix}-bare-${i}`} href={url} target="_blank" rel="noopener noreferrer" style={{ color: C.tealSoft, textDecoration: 'underline' }}>
+        {urlLabel(url)}
+      </a>
+    );
+    lastIndex = m.index + m[0].length;
+    i += 1;
+  }
+  if (lastIndex < text.length) parts.push(text.slice(lastIndex));
+  return parts;
+};
 const renderRichContent = (content) => {
   const lines = (content || '').split('\n').filter((l) => l.trim() !== '');
   return lines.map((line, li) => {
@@ -385,7 +415,7 @@ const renderRichContent = (content) => {
     let m;
     MARKDOWN_LINK_RE.lastIndex = 0;
     while ((m = MARKDOWN_LINK_RE.exec(line))) {
-      if (m.index > lastIndex) parts.push(line.slice(lastIndex, m.index));
+      if (m.index > lastIndex) parts.push(...renderBareLinks(line.slice(lastIndex, m.index), `${li}-${lastIndex}`));
       parts.push(
         <a key={`${li}-${m.index}`} href={m[2]} target="_blank" rel="noopener noreferrer" style={{ color: C.tealSoft, textDecoration: 'underline' }}>
           {m[1]}
@@ -393,7 +423,7 @@ const renderRichContent = (content) => {
       );
       lastIndex = m.index + m[0].length;
     }
-    if (lastIndex < line.length) parts.push(line.slice(lastIndex));
+    if (lastIndex < line.length) parts.push(...renderBareLinks(line.slice(lastIndex), `${li}-${lastIndex}`));
     return <div key={li} style={{ marginBottom: 2 }}>{parts}</div>;
   });
 };
@@ -2474,13 +2504,52 @@ function WealthItemForm({ initial, onSave, onCancel }) {
   );
 }
 
+function LinkNameModal({ url, defaultName, onSave, onSkip }) {
+  const [name, setName] = useState(defaultName || '');
+  return (
+    <div
+      className="fixed inset-0 flex items-center justify-center z-50 px-4"
+      style={{ background: 'rgba(0,0,0,0.5)' }}
+      onClick={onSkip}
+    >
+      <div onClick={(e) => e.stopPropagation()} style={{ width: '100%', maxWidth: 360 }}>
+        <Card style={{ padding: '18px 20px' }}>
+          <div className="text-sm font-semibold mb-1" style={{ color: C.text }}>Naziv za link</div>
+          <div className="text-xs mb-3 break-all" style={{ color: C.textFaint }}>{url}</div>
+          <input
+            autoFocus value={name} onChange={(e) => setName(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter' && name.trim()) onSave(name.trim()); if (e.key === 'Escape') onSkip(); }}
+            placeholder="npr. Rolex Submariner"
+            className="w-full text-sm rounded-md px-2.5 py-1.5 mb-3"
+            style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.text }}
+          />
+          <div className="flex items-center justify-end gap-2">
+            <button onClick={onSkip} className="text-sm px-3.5 py-1.5 rounded-md" style={{ color: C.textMuted, border: `1px solid ${C.border}` }}>Preskoči</button>
+            <button
+              disabled={!name.trim()}
+              onClick={() => onSave(name.trim())}
+              className="text-sm px-4 py-1.5 rounded-md font-semibold"
+              style={{ background: name.trim() ? C.goldSoft : C.borderSoft, color: name.trim() ? C.bg : C.textFaint, cursor: name.trim() ? 'pointer' : 'not-allowed' }}
+            >
+              Spremi
+            </button>
+          </div>
+        </Card>
+      </div>
+    </div>
+  );
+}
+
 // Lista pojedinačnih redaka "Sadržaja" (svaki link ili obični redak - zaseban
 // unos) koju se može premještati drag&dropom (nativni HTML5 DnD, bez
 // dodatne biblioteke - drži hvataljku pa povuci gore/dolje), uređivati
 // pojedinačno (olovčica) ili ukloniti (kanta), plus dodavanje novog retka na
 // dnu. Content se i dalje sprema kao jedan string s \n između redaka (isti
 // format kao dosad, bez promjene baze) - ovo je samo interaktivan prikaz/urednik
-// nad tim stringom.
+// nad tim stringom. Ako je cijeli unos "goli" URL, prije spremanja se otvara
+// mali dijalog (LinkNameModal) gdje se upiše smislen naziv za link - link se
+// tada sprema kao [naziv](url); "Preskoči" sprema goli URL kakav jest
+// (renderRichContent mu onda sam daje naziv prema domeni).
 function WealthContentEditor({ content, onChange }) {
   const lines = (content || '').split('\n').filter((l) => l.trim() !== '');
   const [editingIndex, setEditingIndex] = useState(null);
@@ -2489,6 +2558,7 @@ function WealthContentEditor({ content, onChange }) {
   const [overIndex, setOverIndex] = useState(null);
   const [addingNew, setAddingNew] = useState(false);
   const [newDraft, setNewDraft] = useState('');
+  const [linkPrompt, setLinkPrompt] = useState(null);
 
   const commitLines = (nextLines) => onChange(nextLines.map((l) => l.trim()).filter(Boolean).join('\n'));
 
@@ -2504,16 +2574,38 @@ function WealthContentEditor({ content, onChange }) {
 
   const startEdit = (i) => { setEditingIndex(i); setDraft(lines[i]); };
   const saveEdit = (i) => {
+    const val = draft.trim();
+    if (!val) { const next = [...lines]; next.splice(i, 1); commitLines(next); setEditingIndex(null); return; }
+    if (BARE_URL_ONLY_RE.test(val)) {
+      setLinkPrompt({
+        url: val,
+        onSave: (name) => { const next = [...lines]; next[i] = `[${name}](${val})`; commitLines(next); },
+        onSkip: () => { const next = [...lines]; next[i] = val; commitLines(next); },
+      });
+      setEditingIndex(null);
+      return;
+    }
     const next = [...lines];
-    if (draft.trim()) next[i] = draft.trim(); else next.splice(i, 1);
+    next[i] = val;
     commitLines(next);
     setEditingIndex(null);
   };
   const removeLine = (i) => commitLines(lines.filter((_, idx) => idx !== i));
 
   const addLine = () => {
-    if (!newDraft.trim()) { setAddingNew(false); setNewDraft(''); return; }
-    commitLines([...lines, newDraft.trim()]);
+    const val = newDraft.trim();
+    if (!val) { setAddingNew(false); setNewDraft(''); return; }
+    if (BARE_URL_ONLY_RE.test(val)) {
+      setLinkPrompt({
+        url: val,
+        onSave: (name) => commitLines([...lines, `[${name}](${val})`]),
+        onSkip: () => commitLines([...lines, val]),
+      });
+      setNewDraft('');
+      setAddingNew(false);
+      return;
+    }
+    commitLines([...lines, val]);
     setNewDraft('');
     setAddingNew(false);
   };
@@ -2577,6 +2669,15 @@ function WealthContentEditor({ content, onChange }) {
         <button onClick={() => setAddingNew(true)} className="inline-flex items-center gap-1 text-xs mt-1" style={{ color: C.tealSoft }}>
           <Plus size={12} /> Dodaj redak
         </button>
+      )}
+
+      {linkPrompt && (
+        <LinkNameModal
+          url={linkPrompt.url}
+          defaultName={urlLabel(linkPrompt.url)}
+          onSave={(name) => { linkPrompt.onSave(name); setLinkPrompt(null); }}
+          onSkip={() => { linkPrompt.onSkip(); setLinkPrompt(null); }}
+        />
       )}
     </div>
   );
