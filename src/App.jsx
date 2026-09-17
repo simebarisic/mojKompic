@@ -2683,7 +2683,7 @@ function WealthContentEditor({ content, onChange }) {
   );
 }
 
-function WealthItemRow({ item, onEdit, onDelete, onUpdateContent }) {
+function WealthItemRow({ item, onEdit, onDelete, onUpdateContent, onMoveUp, onMoveDown, isFirst, isLast }) {
   return (
     <Card style={{ padding: '14px 18px' }}>
       <div className="flex items-start justify-between gap-3">
@@ -2694,7 +2694,17 @@ function WealthItemRow({ item, onEdit, onDelete, onUpdateContent }) {
           </div>
           <WealthContentEditor content={item.content} onChange={(content) => onUpdateContent(item.id, content)} />
         </div>
-        <div className="flex items-center gap-3 shrink-0">
+        <div className="flex items-center gap-2 shrink-0">
+          <div className="flex flex-col items-center" style={{ marginRight: 2 }}>
+            <button onClick={onMoveUp} disabled={isFirst} title="Pomakni kategoriju gore"
+              style={{ color: isFirst ? C.borderSoft : C.textFaint, cursor: isFirst ? 'default' : 'pointer', lineHeight: 0, padding: 2 }}>
+              <ChevronUp size={15} />
+            </button>
+            <button onClick={onMoveDown} disabled={isLast} title="Pomakni kategoriju dolje"
+              style={{ color: isLast ? C.borderSoft : C.textFaint, cursor: isLast ? 'default' : 'pointer', lineHeight: 0, padding: 2 }}>
+              <ChevronDown size={15} />
+            </button>
+          </div>
           <button onClick={() => onEdit(item)} className="text-xs" style={{ color: C.textMuted }}>Uredi</button>
           <button onClick={() => onDelete(item.id)} className="text-xs" style={{ color: C.textFaint }}>Obriši</button>
         </div>
@@ -2727,12 +2737,26 @@ function GenerationalWealth({ wealthItems, setWealthItems }) {
     setWealthItems((prev) => prev.map((w) => (w.id === id ? { ...w, content } : w)));
   };
 
+  // Premještanje cijele kategorije (kartice) gore/dolje unutar liste -
+  // zamjena mjesta sa susjednom karticom po redoslijedu u nizu; redoslijed
+  // niza je isti onaj koji se sprema kao sort_order u bazi.
+  const moveItem = (id, direction) => {
+    setWealthItems((prev) => {
+      const idx = prev.findIndex((w) => w.id === id);
+      const swapIdx = direction === 'up' ? idx - 1 : idx + 1;
+      if (idx < 0 || swapIdx < 0 || swapIdx >= prev.length) return prev;
+      const next = [...prev];
+      [next[idx], next[swapIdx]] = [next[swapIdx], next[idx]];
+      return next;
+    });
+  };
+
   return (
     <div className="space-y-4">
       <Card style={{ padding: '20px 24px' }}>
         <div className="text-xs uppercase tracking-wide" style={{ color: C.textFaint, letterSpacing: '0.08em' }}>Generacijsko bogatstvo</div>
         <div className="text-sm mt-1.5" style={{ color: C.textMuted }}>
-          Popis fizičke imovine, opreme i ulaganja za dugoročno/generacijsko bogatstvo, s poveznicama na konkretne proizvode — preslika Notion stranice istog imena. Dodaj nove stavke po potrebi, a pojedinačne retke unutar stavke povuci za hvataljku da im promijeniš redoslijed.
+          Popis fizičke imovine, opreme i ulaganja za dugoročno/generacijsko bogatstvo, s poveznicama na konkretne proizvode — preslika Notion stranice istog imena. Dodaj nove stavke po potrebi, pojedinačne retke unutar stavke povuci za hvataljku da im promijeniš redoslijed, a cijele kategorije premjesti gore/dolje strelicama uz svaku karticu.
         </div>
       </Card>
 
@@ -2745,8 +2769,12 @@ function GenerationalWealth({ wealthItems, setWealthItems }) {
       {editingItem && <WealthItemForm initial={editingItem} onSave={handleSave} onCancel={() => setEditingId(null)} />}
 
       <div className="space-y-3">
-        {wealthItems.map((item) => (
-          <WealthItemRow key={item.id} item={item} onEdit={(x) => setEditingId(x.id)} onDelete={handleDelete} onUpdateContent={handleUpdateContent} />
+        {wealthItems.map((item, idx) => (
+          <WealthItemRow
+            key={item.id} item={item} onEdit={(x) => setEditingId(x.id)} onDelete={handleDelete} onUpdateContent={handleUpdateContent}
+            onMoveUp={() => moveItem(item.id, 'up')} onMoveDown={() => moveItem(item.id, 'down')}
+            isFirst={idx === 0} isLast={idx === wealthItems.length - 1}
+          />
         ))}
       </div>
 
