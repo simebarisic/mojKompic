@@ -39,6 +39,24 @@ try {
 const app = express();
 app.use(express.json({ limit: '5mb' }));
 
+// ---- Health endpointi (Kubernetes probe) ----
+// Namjerno PRIJE prijave lozinkom, da ih kubelet može zvati bez sesije.
+// /healthz = liveness: proces je živ i event loop odgovara (ne dira bazu -
+//            kratki ispad baze ne smije uzrokovati restart poda).
+// /readyz  = readiness: može li app stvarno služiti promet (baza dostupna);
+//            dok vraća 503, Service ne šalje promet na ovaj pod.
+let shuttingDown = false;
+app.get('/healthz', (req, res) => res.json({ status: 'ok' }));
+app.get('/readyz', async (req, res) => {
+  if (shuttingDown) return res.status(503).json({ status: 'shutting-down' });
+  try {
+    await db.ping();
+    res.json({ status: 'ready', db: usePostgres ? 'postgres' : 'sqlite' });
+  } catch (e) {
+    res.status(503).json({ status: 'db-unavailable', error: e.message });
+  }
+});
+
 // ---- Jednostavna zaštita lozinkom (samo za "pravu" instancu) ----
 // Uključuje se SAMO ako je postavljen AUTH_PASSWORD_HASH (bcrypt hash lozinke
 // - generiraj ga s "npm run hash-password", vidi scripts/generate-password-hash.js).
@@ -443,6 +461,24 @@ if (fs.existsSync(distPath)) {
 }
 
 const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`Server sluša na http://localhost:${PORT} (baza: ${usePostgres ? 'Postgres' : 'SQLite'})`);
 });
+
+// ---- Graceful shutdown ----
+// Kubernetes (i `docker stop`) šalje SIGTERM prije gašenja poda. Prestanemo
+// primati nove konekcije, dovršimo započete zahtjeve i zatvorimo bazu, umjesto
+// da proces bude nasilno ubijen usred zapisa.
+function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`${signal} primljen - gasim server...`);
+  server.close(async () => {
+    try { await db.close?.(); } catch (e) { console.error('Greška pri zatvaranju baze:', e.message); }
+    process.exit(0);
+  });
+  // Sigurnosna mreža: ako nešto visi, izađi prije nego kubelet pošalje SIGKILL.
+  setTimeout(() => process.exit(1), 10_000).unref();
+}
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));

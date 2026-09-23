@@ -1,0 +1,118 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: moj-kompic
+  labels:
+    app.kubernetes.io/name: moj-kompic
+spec:
+  selector:
+    app.kubernetes.io/name: moj-kompic
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: moj-kompic
+  labels:
+    app.kubernetes.io/name: moj-kompic
+spec:
+  # NAMJERNO 1 replika: sesije za prijavu i brojač pokušaja prijave žive u
+  # memoriji procesa (vidi server.js). S 2+ replike korisnik bi se "odjavio"
+  # čim ga load balancer pošalje na drugi pod. Za skaliranje bi trebao
+  # dijeljeni session store (npr. connect-pg-simple).
+  replicas: 1
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: moj-kompic
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: moj-kompic
+    spec:
+      terminationGracePeriodSeconds: 20
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000      # "node" korisnik iz node:22-alpine imagea
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      # Čeka da Postgres prihvaća konekcije prije nego app krene u db.init(),
+      # umjesto da app par puta padne u CrashLoopBackOff.
+      initContainers:
+        - name: wait-for-postgres
+          image: postgres:16-alpine
+          command:
+            - sh
+            - -c
+            - until pg_isready -h postgres -p 5432 -U kompic; do echo "čekam postgres..."; sleep 2; done
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+      containers:
+        - name: app
+          image: moj-kompic
+          ports:
+            - name: http
+              containerPort: 3001
+          envFrom:
+            - configMapRef:
+                name: moj-kompic-config
+          env:
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: moj-kompic-secrets
+                  key: POSTGRES_PASSWORD
+            # $(VAR) se u Kubernetesu proširuje iz ranije definiranih env
+            # varijabli. Zato lozinka mora biti URL-safe (npr. openssl rand -hex 24).
+            - name: DATABASE_URL
+              value: postgres://kompic:$(POSTGRES_PASSWORD)@postgres:5432/kompic
+            - name: AUTH_PASSWORD_HASH
+              valueFrom:
+                secretKeyRef:
+                  name: moj-kompic-secrets
+                  key: AUTH_PASSWORD_HASH
+                  optional: true
+            - name: SESSION_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: moj-kompic-secrets
+                  key: SESSION_SECRET
+                  optional: true
+          # startupProbe daje vremena za db.init() i auto-seed; tek kad prođe,
+          # kreću liveness/readiness.
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 3
+            failureThreshold: 30
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 15
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 2
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              memory: 384Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]

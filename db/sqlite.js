@@ -13,6 +13,15 @@ function getDb() {
   return db;
 }
 
+// Lagana provjera baze - koristi je /readyz (Kubernetes readiness probe).
+export async function ping() {
+  getDb().prepare('SELECT 1').get();
+}
+
+export async function close() {
+  if (db) db.close();
+}
+
 export async function init() {
   const database = getDb();
   database.exec(`

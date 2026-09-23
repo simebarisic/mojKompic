@@ -1,0 +1,36 @@
+# Lokalni lanac certifikata preko cert-managera (klasični "CA issuer" uzorak):
+#   1) self-signed Issuer potpiše
+#   2) vlastiti lokalni CA certifikat (moj-kompic-local-ca), koji onda
+#   3) kao CA Issuer izdaje certifikat za Ingress.
+# Kad jednom dodaš taj CA u macOS Keychain (./scripts/k8s-local.sh trust-ca),
+# preglednik vjeruje https://kompic.localtest.me bez upozorenja.
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: selfsigned-bootstrap
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: moj-kompic-local-ca
+spec:
+  isCA: true
+  commonName: Moj Kompic Local CA
+  secretName: moj-kompic-local-ca
+  duration: 87600h   # 10 godina
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    kind: Issuer
+    name: selfsigned-bootstrap
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: moj-kompic-ca
+spec:
+  ca:
+    secretName: moj-kompic-local-ca

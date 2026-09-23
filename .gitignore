@@ -10,3 +10,6 @@ Claude outputs
 # Osobni/stvarni podaci - nikad u git (vidi db/*.local.js, scripts/*.local.json)
 *.local.js
 *.local.json
+
+# Kubernetes lokalni secreti
+k8s/overlays/local/secret.env

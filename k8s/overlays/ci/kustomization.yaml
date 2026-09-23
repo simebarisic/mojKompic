@@ -1,0 +1,36 @@
+# Overlay za GitHub Actions: efemerni k3d klaster koji živi samo tijekom
+# CI joba (vidi .github/workflows/moj-kompic-k8s.yml). Bez Ingressa/TLS-a -
+# smoke test ide preko kubectl port-forward.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: moj-kompic
+
+resources:
+  - namespace.yaml
+  - ../../base
+
+images:
+  # 'name' mora odgovarati imenu koje base već postavio (GHCR image).
+  - name: ghcr.io/simebarisic/moj-kompic
+    newName: moj-kompic
+    newTag: ci
+
+# Testne vrijednosti - klaster se briše na kraju joba.
+secretGenerator:
+  - name: moj-kompic-secrets
+    literals:
+      - POSTGRES_PASSWORD=ci-test-lozinka-0123456789abcdef
+      - AUTH_PASSWORD_HASH=
+      - SESSION_SECRET=ci-test-session-secret
+
+patches:
+  - target:
+      kind: Ingress
+      name: moj-kompic
+    patch: |-
+      $patch: delete
+      apiVersion: networking.k8s.io/v1
+      kind: Ingress
+      metadata:
+        name: moj-kompic

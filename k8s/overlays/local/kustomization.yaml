@@ -1,0 +1,57 @@
+# Lokalni klaster za učenje: k3d (k3s u Dockeru) s ugrađenim Traefikom.
+# Pokretanje: ./scripts/k8s-local.sh up   (vidi README, sekcija Kubernetes)
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: moj-kompic
+
+resources:
+  - namespace.yaml
+  - ../../base
+  - tls-issuer.yaml
+
+# Image se builda lokalno i uvozi u k3d (k3d image import) - nema pulla s GHCR-a.
+images:
+  # 'name' mora odgovarati imenu koje base već postavio (GHCR image).
+  - name: ghcr.io/simebarisic/moj-kompic
+    newName: moj-kompic
+    newTag: local
+
+configMapGenerator:
+  - name: moj-kompic-config
+    behavior: merge
+    literals:
+      - COOKIE_SECURE=true   # Ingress je na HTTPS-u
+
+# secret.env NIJE u gitu (vidi .gitignore). Kopiraj secret.env.example.
+secretGenerator:
+  - name: moj-kompic-secrets
+    envs:
+      - secret.env
+
+patches:
+  - target:
+      kind: Ingress
+      name: moj-kompic
+    patch: |-
+      - op: add
+        path: /metadata/annotations
+        value:
+          cert-manager.io/issuer: moj-kompic-ca
+      - op: add
+        path: /spec/ingressClassName
+        value: traefik
+      - op: replace
+        path: /spec/tls/0/hosts/0
+        value: kompic.localtest.me
+      - op: replace
+        path: /spec/rules/0/host
+        value: kompic.localtest.me
+  # Lokalno je dovoljno manje prostora.
+  - target:
+      kind: StatefulSet
+      name: postgres
+    patch: |-
+      - op: replace
+        path: /spec/volumeClaimTemplates/0/spec/resources/requests/storage
+        value: 1Gi

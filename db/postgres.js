@@ -10,6 +10,16 @@ function getPool() {
   return pool;
 }
 
+// Lagana provjera veze s bazom - koristi je /readyz (Kubernetes readiness probe).
+export async function ping() {
+  await getPool().query('SELECT 1');
+}
+
+// Zatvara pool pri gašenju (SIGTERM iz Kubernetesa / docker stop).
+export async function close() {
+  if (pool) await pool.end();
+}
+
 export async function init() {
   const p = getPool();
   await p.query(`

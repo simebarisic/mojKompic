@@ -1,0 +1,89 @@
+name: K8s - validacija i test deploy
+
+# Deploy na tvoj lokalni klaster iz GitHuba nije moguć (GitHub ga ne vidi),
+# pa CI umjesto toga svaki put digne EFEMERNI k3d klaster na runneru, deploya
+# aplikaciju istim manifestima i provjeri da stvarno radi. Klaster nestaje
+# s krajem joba.
+on:
+  pull_request:
+  push:
+    branches: [main]
+    paths:
+      - "k8s/**"
+      - "server.js"
+      - "db/**"
+      - "Dockerfile"
+      - "package*.json"
+      - ".github/workflows/moj-kompic-k8s.yml"
+  workflow_dispatch:
+
+jobs:
+  validate:
+    name: Validacija manifesta (kustomize + kubeconform)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Instaliraj kubeconform
+        run: |
+          curl -sSL https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64.tar.gz \
+            | tar xz -C /usr/local/bin kubeconform
+
+      - name: kustomize build + kubeconform za svaki overlay
+        run: |
+          # local overlay traži secret.env (nije u gitu) - za validaciju je dovoljan primjer
+          cp k8s/overlays/local/secret.env.example k8s/overlays/local/secret.env
+          for o in k8s/overlays/*/; do
+            echo "::group::$o"
+            kubectl kustomize "$o" | kubeconform -strict -summary \
+              -schema-location default \
+              -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
+            echo "::endgroup::"
+          done
+
+  e2e:
+    name: Test deploy na k3d
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -t moj-kompic:ci .
+
+      - name: Instaliraj k3d i digni klaster
+        run: |
+          curl -sSL https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | bash
+          k3d cluster create ci --wait --no-lb --k3s-arg "--disable=traefik@server:0"
+          k3d image import moj-kompic:ci -c ci
+          kubectl get nodes
+
+      - name: Deploy (kubectl apply -k k8s/overlays/ci)
+        run: |
+          kubectl apply -k k8s/overlays/ci
+          kubectl -n moj-kompic rollout status statefulset/postgres --timeout=180s
+          kubectl -n moj-kompic rollout status deploy/moj-kompic --timeout=180s
+
+      - name: Smoke test
+        run: |
+          kubectl -n moj-kompic port-forward svc/moj-kompic 8080:80 >/tmp/pf.log 2>&1 &
+          for i in $(seq 1 20); do curl -sf localhost:8080/healthz && break; sleep 1; done
+          echo; echo "--- /readyz"; curl -sf localhost:8080/readyz | tee /dev/stderr | grep -q '"postgres"'
+          echo; echo "--- /api/state"; curl -sf localhost:8080/api/state | head -c 300
+          echo; echo "--- frontend"; curl -sf localhost:8080/ | grep -qi '<div id="root"'
+          echo "Smoke test prošao"
+
+      - name: Test backup CronJoba
+        run: |
+          kubectl -n moj-kompic create job --from=cronjob/postgres-backup backup-ci
+          kubectl -n moj-kompic wait --for=condition=complete job/backup-ci --timeout=120s
+          kubectl -n moj-kompic logs job/backup-ci
+
+      - name: Dijagnostika (samo ako nešto padne)
+        if: failure()
+        run: |
+          kubectl -n moj-kompic get all,pvc,events --sort-by=.metadata.creationTimestamp || true
+          kubectl -n moj-kompic describe pods || true
+          kubectl -n moj-kompic logs deploy/moj-kompic --all-containers --tail=200 || true
+          kubectl -n moj-kompic logs statefulset/postgres --tail=100 || true

@@ -1,0 +1,78 @@
+# Dnevni pg_dump u zaseban PVC, čuva zadnjih 7 dana.
+# Ručno pokretanje:  kubectl -n moj-kompic create job --from=cronjob/postgres-backup backup-rucno
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-backups
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: postgres-backup
+  labels:
+    app.kubernetes.io/name: postgres-backup
+spec:
+  schedule: "0 3 * * *"
+  timeZone: Europe/Zagreb
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      ttlSecondsAfterFinished: 86400
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: postgres-backup
+        spec:
+          restartPolicy: OnFailure
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 70
+            runAsGroup: 70
+            fsGroup: 70
+          containers:
+            - name: pg-dump
+              image: postgres:16-alpine
+              env:
+                - name: PGHOST
+                  value: postgres
+                - name: PGUSER
+                  value: kompic
+                - name: PGDATABASE
+                  value: kompic
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: moj-kompic-secrets
+                      key: POSTGRES_PASSWORD
+                - name: KEEP_DAYS
+                  value: "7"
+              command:
+                - sh
+                - -euc
+                - |
+                  f="/backups/kompic-$(date +%Y%m%d-%H%M%S).sql.gz"
+                  echo "Radim backup u $f"
+                  pg_dump --no-owner --clean --if-exists | gzip > "$f.tmp"
+                  mv "$f.tmp" "$f"
+                  find /backups -name 'kompic-*.sql.gz' -mtime +"$KEEP_DAYS" -print -delete
+                  echo "Gotovo. Trenutni backupi:"
+                  ls -lh /backups
+              volumeMounts:
+                - name: backups
+                  mountPath: /backups
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: ["ALL"]
+          volumes:
+            - name: backups
+              persistentVolumeClaim:
+                claimName: postgres-backups

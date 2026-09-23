@@ -1,0 +1,29 @@
+# Zajednička osnova za sve okoline. Overlaye (k8s/overlays/*) mijenjaju samo
+# ono što se razlikuje: namespace, image tag, host, TLS izdavatelja i secrete.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: moj-kompic
+    includeSelectors: false
+
+resources:
+  - postgres.yaml
+  - app.yaml
+  - ingress.yaml
+  - backup.yaml
+
+# Ne-tajne postavke aplikacije. Kustomize dodaje hash u ime ConfigMapa, pa
+# svaka promjena ovdje automatski pokreće rolling restart Deploymenta.
+configMapGenerator:
+  - name: moj-kompic-config
+    literals:
+      - NODE_ENV=production
+      - PORT=3001
+      - COOKIE_SECURE=false
+
+images:
+  - name: moj-kompic
+    newName: ghcr.io/simebarisic/moj-kompic
+    newTag: latest

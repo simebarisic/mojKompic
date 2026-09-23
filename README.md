@@ -68,7 +68,8 @@ moj-kompic/
 ├── db/postgres.js         DB adapter (Postgres)
 ├── db/sqlite.js           DB adapter (SQLite)
 ├── src/App.jsx            React frontend (sve komponente/tabovi)
-└── scripts/               jednokratne uvozne/migracijske skripte
+├── scripts/               jednokratne uvozne/migracijske skripte (+ k8s-local.sh)
+└── k8s/                   Kubernetes manifesti (Kustomize) - vidi sekciju Kubernetes
 ```
 
 ## CI/CD (GitHub Actions)
@@ -81,3 +82,63 @@ moj-kompic/
   `MORDOR_HOST`, `MORDOR_USER`, `MORDOR_SSH_KEY`, `POSTGRES_PASSWORD`,
   `AUTH_PASSWORD_HASH`, `SESSION_SECRET` (vidi "Prijava lozinkom" iznad) i
   po želji Variable `COOKIE_SECURE`.
+- `.github/workflows/moj-kompic-k8s.yml` — na svaki PR/push validira Kubernetes
+  manifeste i napravi test deploy na efemerni k3d klaster (vidi sekciju Kubernetes).
+
+## Kubernetes (lokalno, za učenje)
+
+Manifesti su u `k8s/` i složeni su s Kustomizeom (ugrađen u `kubectl`):
+
+```
+k8s/
+├── base/                  zajedničko za sve okoline
+│   ├── app.yaml           Deployment + Service (probe, securityContext, initContainer)
+│   ├── postgres.yaml      StatefulSet + headless Service + PVC
+│   ├── ingress.yaml       Ingress s TLS-om
+│   └── backup.yaml        CronJob: dnevni pg_dump u zaseban PVC (čuva 7 dana)
+└── overlays/
+    ├── local/             k3d + Traefik + cert-manager, https://kompic.localtest.me
+    └── ci/                za GitHub Actions (bez Ingressa, testni secreti)
+```
+
+Preduvjeti: Docker Desktop + `brew install k3d kubectl`.
+
+```bash
+./scripts/k8s-local.sh up        # klaster + cert-manager + build + deploy
+./scripts/k8s-local.sh status    # podovi, PVC-ovi, certifikat...
+./scripts/k8s-local.sh deploy    # nakon promjene koda: rebuild + rollout
+./scripts/k8s-local.sh backup    # ručni backup baze
+./scripts/k8s-local.sh trust-ca  # macOS vjeruje lokalnom CA -> HTTPS bez upozorenja
+./scripts/k8s-local.sh down      # briše klaster (i podatke!)
+```
+
+`up` pri prvom pokretanju kreira `k8s/overlays/local/secret.env` s nasumičnim
+lozinkama (nije u gitu, vidi `secret.env.example`). Za prijavu lozinkom dodaj
+`AUTH_PASSWORD_HASH` u taj fajl i pokreni `deploy`.
+
+Korisne naredbe za učenje:
+
+```bash
+kubectl -n moj-kompic get pods -w                       # prati podove uživo
+kubectl -n moj-kompic describe pod -l app.kubernetes.io/name=moj-kompic
+kubectl -n moj-kompic exec -it postgres-0 -- psql -U kompic
+kubectl kustomize k8s/overlays/local                     # vidi generirani YAML
+```
+
+Restore iz backupa:
+
+```bash
+kubectl -n moj-kompic run restore --rm -it --image=postgres:16-alpine \
+  --overrides='{"spec":{"volumes":[{"name":"b","persistentVolumeClaim":{"claimName":"postgres-backups"}}],"containers":[{"name":"restore","image":"postgres:16-alpine","stdin":true,"tty":true,"command":["sh"],"volumeMounts":[{"name":"b","mountPath":"/backups"}]}]}}'
+# u shellu:  ls /backups && gunzip -c /backups/kompic-XXXX.sql.gz | PGPASSWORD=... psql -h postgres -U kompic kompic
+```
+
+Health endpointi (rade i kad je uključena prijava): `/healthz` (liveness,
+ne dira bazu) i `/readyz` (readiness, provjerava bazu). Server na SIGTERM
+završi započete zahtjeve i zatvori bazu (graceful shutdown).
+
+Aplikacija namjerno ide s **1 replikom** jer su sesije u memoriji procesa.
+
+CI: `.github/workflows/moj-kompic-k8s.yml` na svaki PR/push validira manifeste
+(kubeconform) i digne efemerni k3d klaster na runneru, deploya `overlays/ci`,
+napravi smoke test (`/healthz`, `/readyz`, `/api/state`, frontend) i testni backup.

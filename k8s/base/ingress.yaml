@@ -1,0 +1,25 @@
+# Ingress s TLS-om. Overlay dodaje cert-manager anotaciju (issuer) - cert-manager
+# je vidi, sam kreira Certificate i sprema cert u secret "moj-kompic-tls".
+# Host i ingress klasa se također postavljaju u overlayu.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: moj-kompic
+  labels:
+    app.kubernetes.io/name: moj-kompic
+spec:
+  tls:
+    - hosts:
+        - kompic.example.com
+      secretName: moj-kompic-tls
+  rules:
+    - host: kompic.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: moj-kompic
+                port:
+                  name: http
