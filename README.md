@@ -142,3 +142,10 @@ Aplikacija namjerno ide s **1 replikom** jer su sesije u memoriji procesa.
 CI: `.github/workflows/moj-kompic-k8s.yml` na svaki PR/push validira manifeste
 (kubeconform) i digne efemerni k3d klaster na runneru, deploya `overlays/ci`,
 napravi smoke test (`/healthz`, `/readyz`, `/api/state`, frontend) i testni backup.
+
+## OpenShift Local (CRC) - pilot
+
+Isti `k8s/base` deployan na OpenShift: Route umjesto Ingressa, BuildConfig i
+ImageStream umjesto lokalnog builda, SCC restricted-v2 (nasumični UID),
+Postgres iz sclorg imagea. Pokretanje: `./scripts/openshift-local.sh up`.
+Detalji i usporedba s k3d-om: [`openshift/README.md`](openshift/README.md).

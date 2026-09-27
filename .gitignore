@@ -13,3 +13,4 @@ Claude outputs
 
 # Kubernetes lokalni secreti
 k8s/overlays/local/secret.env
+openshift/secret.env

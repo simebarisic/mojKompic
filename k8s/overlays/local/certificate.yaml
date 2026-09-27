@@ -1,0 +1,20 @@
+# TLS certifikat za Ingress, definiran eksplicitno (umjesto cert-manager anotacije
+# na Ingressu) kako bi sigurno imao "server auth" EKU - bez njega macOS/iOS
+# (Safari, Chrome) odbijaju certifikat čak i kad vjeruju lokalnom CA-u.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: moj-kompic-tls
+spec:
+  secretName: moj-kompic-tls
+  duration: 2160h      # 90 dana (Apple: max 825 dana za certifikate od korisničkih CA)
+  renewBefore: 720h
+  dnsNames:
+    - kompic.localtest.me
+  usages:
+    - digital signature
+    - key encipherment
+    - server auth
+  issuerRef:
+    kind: Issuer
+    name: moj-kompic-ca

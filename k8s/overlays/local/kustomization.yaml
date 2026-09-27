@@ -9,6 +9,7 @@ resources:
   - namespace.yaml
   - ../../base
   - tls-issuer.yaml
+  - certificate.yaml
 
 # Image se builda lokalno i uvozi u k3d (k3d image import) - nema pulla s GHCR-a.
 images:
@@ -34,10 +35,6 @@ patches:
       kind: Ingress
       name: moj-kompic
     patch: |-
-      - op: add
-        path: /metadata/annotations
-        value:
-          cert-manager.io/issuer: moj-kompic-ca
       - op: add
         path: /spec/ingressClassName
         value: traefik

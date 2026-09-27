@@ -7,6 +7,7 @@
 #   ./scripts/k8s-local.sh logs      prati logove aplikacije
 #   ./scripts/k8s-local.sh backup    ručno pokreni backup baze (Job iz CronJoba)
 #   ./scripts/k8s-local.sh trust-ca  doda lokalni CA u macOS Keychain (HTTPS bez upozorenja)
+#   ./scripts/k8s-local.sh stop      pauzira klaster (podaci ostaju), "up" ga opet pokrene
 #   ./scripts/k8s-local.sh down      obriše cijeli klaster (i sve podatke u njemu!)
 #
 # Treba: Docker Desktop (upaljen), k3d, kubectl  ->  brew install k3d kubectl
@@ -33,9 +34,22 @@ ENV
   fi
 }
 
+check_other_clusters() {
+  # Drugi upaljeni k3d klaster (npr. od drugog projekta) već drži portove 80/443.
+  local others
+  others="$(k3d cluster list --no-headers 2>/dev/null | awk -v c="$CLUSTER" '$1!=c && $2 ~ /^[1-9]/ {print $1}')"
+  if [ -n "$others" ]; then
+    echo "Upaljen je drugi k3d klaster koji koristi portove 80/443: $others" >&2
+    echo "Ugasi ga pa pokreni ponovno:  k3d cluster stop $others" >&2
+    exit 1
+  fi
+}
+
 create_cluster() {
+  check_other_clusters
   if k3d cluster list "$CLUSTER" >/dev/null 2>&1; then
-    echo "==> Klaster '$CLUSTER' već postoji"
+    echo "==> Klaster '$CLUSTER' postoji - pokrećem ga (ako je bio zaustavljen)"
+    k3d cluster start "$CLUSTER" --wait
   else
     echo "==> Kreiram k3d klaster '$CLUSTER' (portovi 80/443 -> Traefik)"
     k3d cluster create "$CLUSTER" \
@@ -64,10 +78,16 @@ build_and_import() {
 deploy() {
   kubectl config use-context "k3d-$CLUSTER" >/dev/null
   ensure_secret_env
+  # Deploymenti koji su postojali PRIJE applyja - samo njih treba restartati
+  # (tag 'local' se ne mijenja, pa Kubernetes sam ne bi primijetio novi image).
+  # Pri prvom deployu nema čega restartati - inače bi se svaki pod dizao dvaput.
+  local existing_deploys
+  existing_deploys="$(kubectl -n "$NS" get deploy -o name 2>/dev/null || true)"
   echo "==> kubectl apply -k k8s/overlays/local"
   kubectl apply -k "$OVERLAY"
-  # Tag 'local' se ne mijenja, pa Deployment sam ne bi primijetio novi image.
-  kubectl -n "$NS" rollout restart deploy/moj-kompic
+  if [ -n "$existing_deploys" ]; then
+    kubectl -n "$NS" rollout restart $existing_deploys
+  fi
   kubectl -n "$NS" rollout status statefulset/postgres --timeout=180s
   kubectl -n "$NS" rollout status deploy/moj-kompic --timeout=180s
   echo
@@ -98,8 +118,10 @@ case "${1:-}" in
     security add-trusted-cert -r trustRoot -k "$HOME/Library/Keychains/login.keychain-db" "$tmp"
     rm -f "$tmp"
     echo "Gotovo. Restartaj preglednik." ;;
+  stop)
+    k3d cluster stop "$CLUSTER" ;;
   down)
     k3d cluster delete "$CLUSTER" ;;
   *)
-    sed -n '2,12p' "$0"; exit 1 ;;
+    sed -n '2,13p' "$0"; exit 1 ;;
 esac

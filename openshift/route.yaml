@@ -1,0 +1,19 @@
+# Route = OpenShiftov "Ingress". TLS radi OpenShift router (edge terminacija)
+# sa svojim wildcard certifikatom za *.apps-crc.testing - nema cert-managera.
+# http:// se automatski preusmjerava na https://.
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: moj-kompic
+  labels:
+    app.kubernetes.io/name: moj-kompic
+spec:
+  host: kompic.apps-crc.testing
+  to:
+    kind: Service
+    name: moj-kompic
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect

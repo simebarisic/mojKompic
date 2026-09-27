@@ -1,0 +1,116 @@
+# OpenShift Local (CRC) varijanta - koristi ISTI k8s/base kao k3d, a ovdje
+# mijenja samo ono što je u OpenShiftu drukčije. Vidi openshift/README.md.
+#   ./scripts/openshift-local.sh up
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Project (OpenShift "namespace") kreira skripta s "oc new-project" -
+# developer korisnik ne smije sam kreirati Namespace objekt.
+namespace: moj-kompic
+
+resources:
+  - ../k8s/base
+  - buildconfig.yaml
+  - route.yaml
+
+# Image dolazi iz internog OpenShift registryja (puni ga BuildConfig), ne s GHCR-a.
+images:
+  - name: ghcr.io/simebarisic/moj-kompic
+    newName: image-registry.openshift-image-registry.svc:5000/moj-kompic/moj-kompic
+    newTag: latest
+
+configMapGenerator:
+  - name: moj-kompic-config
+    behavior: merge
+    literals:
+      - COOKIE_SECURE=true   # Route radi TLS (edge), aplikacija je iza HTTPS-a
+
+# secret.env NIJE u gitu. ./scripts/openshift-local.sh up ga sam kreira.
+secretGenerator:
+  - name: moj-kompic-secrets
+    envs:
+      - secret.env
+
+patches:
+  # 1) Ingress -> Route (route.yaml). OpenShift router zna i Ingress, ali Route
+  #    je izvorni OpenShift način i ne treba cert-manager (router sam radi TLS).
+  - target:
+      kind: Ingress
+      name: moj-kompic
+    patch: |-
+      $patch: delete
+      apiVersion: networking.k8s.io/v1
+      kind: Ingress
+      metadata:
+        name: moj-kompic
+
+  # 2) SCC "restricted-v2": OpenShift SAM dodjeljuje nasumični UID iz raspona
+  #    projekta i odbija pod s fiksnim runAsUser izvan tog raspona. Zato
+  #    brišemo fiksni UID/GID (runAsNonRoot i seccomp ostaju).
+  #    + image trigger: čim BuildConfig napravi novi image, Deployment se sam
+  #    rolla na njega (OpenShift ekvivalent "rollout restart" iz k3d skripte).
+  - target:
+      kind: Deployment
+      name: moj-kompic
+    patch: |-
+      - op: remove
+        path: /spec/template/spec/securityContext/runAsUser
+      - op: remove
+        path: /spec/template/spec/securityContext/runAsGroup
+      - op: add
+        path: /metadata/annotations
+        value:
+          image.openshift.io/triggers: '[{"from":{"kind":"ImageStreamTag","name":"moj-kompic:latest"},"fieldPath":"spec.template.spec.containers[?(@.name==\"app\")].image"}]'
+
+  # 3) Postgres: službeni postgres image pokreće entrypoint kao root pa se
+  #    prebacuje na uid 999 - to restricted-v2 ne dopušta. Red Hat/sclorg
+  #    image je napravljen za OpenShift: radi s bilo kojim UID-om.
+  #    Druge env varijable (POSTGRESQL_*) i drugi data direktorij.
+  - target:
+      kind: StatefulSet
+      name: postgres
+    patch: |-
+      - op: remove
+        path: /spec/template/spec/securityContext
+      - op: replace
+        path: /spec/template/spec/containers/0/image
+        value: quay.io/sclorg/postgresql-16-c9s:latest
+      - op: replace
+        path: /spec/template/spec/containers/0/env
+        value:
+          - name: POSTGRESQL_DATABASE
+            value: kompic
+          - name: POSTGRESQL_USER
+            value: kompic
+          - name: POSTGRESQL_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: moj-kompic-secrets
+                key: POSTGRES_PASSWORD
+      - op: replace
+        path: /spec/template/spec/containers/0/volumeMounts/0/mountPath
+        value: /var/lib/pgsql/data
+      - op: add
+        path: /spec/template/spec/containers/0/securityContext
+        value:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          capabilities:
+            drop: ["ALL"]
+          seccompProfile:
+            type: RuntimeDefault
+      - op: replace
+        path: /spec/volumeClaimTemplates/0/spec/resources/requests/storage
+        value: 1Gi
+
+  # 4) Backup CronJob: isto kao (2) - bez fiksnog UID-a 70.
+  - target:
+      kind: CronJob
+      name: postgres-backup
+    patch: |-
+      - op: replace
+        path: /spec/jobTemplate/spec/template/spec/securityContext
+        value:
+          runAsNonRoot: true
+          seccompProfile:
+            type: RuntimeDefault

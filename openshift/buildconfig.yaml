@@ -1,0 +1,33 @@
+# OpenShift build: image se builda UNUTAR klastera iz tvog Dockerfilea.
+#   oc start-build moj-kompic --from-archive=<tar.gz> --follow
+# (skripta šalje samo fajlove koje git ne ignorira - bez node_modules, .env...)
+# Rezultat ide u ImageStream "moj-kompic:latest" u internom registryju.
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: moj-kompic
+spec:
+  lookupPolicy:
+    local: true
+---
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: moj-kompic
+spec:
+  runPolicy: Serial
+  successfulBuildsHistoryLimit: 3
+  failedBuildsHistoryLimit: 3
+  source:
+    type: Binary
+  strategy:
+    type: Docker
+    dockerStrategy:
+      dockerfilePath: Dockerfile
+  output:
+    to:
+      kind: ImageStreamTag
+      name: moj-kompic:latest
+  resources:
+    limits:
+      memory: 2Gi

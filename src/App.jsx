@@ -1788,16 +1788,56 @@ function PreciousMetals({ metalItems, setMetalItems, priceOverrides, setPriceOve
   );
 }
 
+// Dohvaća TRENUTNU jediničnu cijenu (€/g za zlato i srebro, €/BTC za bitcoin)
+// - koristi se samo kao PRIJEDLOG pri unosu nove stavke u HoldingsTrackerTab
+// (vidi niže). Zlato/srebro preko već postojećeg /api/metal-prices, bitcoin
+// preko /api/investment-prices (isti izvor kao tab "Ulaganja", CoinGecko id
+// "bitcoin"). Dohvaća se jednom po mountu komponente, bez keširanja na
+// frontendu - backend već kešira izvore ~10 min.
+function useLiveUnitPriceEur(kind) {
+  const [price, setPrice] = useState(null);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        if (kind === 'gold' || kind === 'silver') {
+          const res = await fetch('/api/metal-prices');
+          const data = await res.json();
+          if (!cancelled && res.ok) setPrice(Number(data?.[kind]?.eurPerGram) || null);
+        } else if (kind === 'bitcoin') {
+          const res = await fetch('/api/investment-prices', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ items: [{ kind: 'crypto', symbol: 'bitcoin' }] }),
+          });
+          const data = await res.json();
+          if (!cancelled && res.ok) setPrice(Number(data?.prices?.['crypto:bitcoin']?.price) || null);
+        }
+      } catch {
+        // Tiho zanemari - polje cijene jednostavno ostaje prazno za ručni unos.
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [kind]);
+  return price;
+}
+
 // Zasebno praćenje "u jedinicama" (BTC / grami) kroz mjesece - namjerno POSVE
-// ODVOJENO od kategorija/Unosa/neto vrijednosti (vidi holdingsHistory u App):
-// nema automatskog eurskog izračuna, samo količina po mjesecu + graf kretanja.
+// ODVOJENO od kategorija/Unosa/neto vrijednosti (vidi holdingsHistory u App).
 // Za Bitcoin dodatno nudi upareno polje za satošije (unos u bilo koje od dva
 // polja odmah preračunava drugo). Svaki mjesec se može razdijeliti na više
 // unosa po "lokaciji" (npr. cold wallet, mjenjačnica) - graf i "trenutna
 // količina" prate zbroj svih lokacija za taj mjesec (vidi monthlyTotals).
+// Svaki unos uz količinu nosi i OPCIONALNU cijenu po jedinici u eurima
+// (priceEur) - predložena je trenutna tržišna cijena, ali je ručno uredivo
+// polje: za starije mjesece korisnik može upisati stvarnu tadašnju cijenu.
+// Iz quantity x priceEur računa se drugi graf, "Vrijednost kroz mjesece (€)".
+// Unosi bez cijene (npr. stariji, uneseni prije nego je ovo polje postojalo)
+// jednostavno ne ulaze u taj graf za svoj mjesec.
 // Jedna instanca komponente po vrsti (kind: 'bitcoin' | 'gold' | 'silver') -
 // vidi tabove niže u App().
 function HoldingsTrackerTab({ kind, label, unit, color, decimals = 2, allowSats = false, holdingsHistory, setHoldingsHistory, hide, onToggleHide }) {
+  const livePrice = useLiveUnitPriceEur(kind);
   const entries = useMemo(
     () => holdingsHistory
       .filter((h) => h.kind === kind)
@@ -1807,11 +1847,22 @@ function HoldingsTrackerTab({ kind, label, unit, color, decimals = 2, allowSats 
 
   // Ukupna količina po mjesecu = zbroj svih lokacija unesenih za taj mjesec
   // (npr. cold wallet + mjenjačnica) - graf i "trenutna količina" prate ovo.
+  // Uz količinu, zbraja se i vrijednost u eurima (quantity x priceEur) - ALI
+  // samo za unose koji imaju upisanu cijenu; hasValue=false ako niti jedan
+  // unos u tom mjesecu nema cijenu (mjesec se onda izostavlja iz grafa vrijednosti).
   const monthlyTotals = useMemo(() => {
     const map = new Map();
-    entries.forEach((h) => map.set(h.month, (map.get(h.month) || 0) + (Number(h.quantity) || 0)));
+    entries.forEach((h) => {
+      const cur = map.get(h.month) || { quantity: 0, value: 0, hasValue: false };
+      cur.quantity += Number(h.quantity) || 0;
+      if (h.priceEur != null && !Number.isNaN(Number(h.priceEur))) {
+        cur.value += (Number(h.quantity) || 0) * Number(h.priceEur);
+        cur.hasValue = true;
+      }
+      map.set(h.month, cur);
+    });
     return Array.from(map.entries())
-      .map(([m, quantity]) => ({ month: m, quantity }))
+      .map(([m, v]) => ({ month: m, quantity: v.quantity, value: v.hasValue ? v.value : null }))
       .sort((a, b) => a.month.localeCompare(b.month));
   }, [entries]);
 
@@ -1834,9 +1885,19 @@ function HoldingsTrackerTab({ kind, label, unit, color, decimals = 2, allowSats 
   const [location, setLocation] = useState('');
   const [qtyInput, setQtyInput] = useState('');
   const [satInput, setSatInput] = useState('');
+  const [priceInput, setPriceInput] = useState('');
   const [y, mo] = month.split('-').map(Number);
 
+  // Kad se trenutna tržišna cijena učita, a korisnik još ništa nije upisao u
+  // polje cijene (nova stavka, ne uređivanje), predloži je kao početnu vrijednost.
+  useEffect(() => {
+    if (livePrice != null && priceInput === '') setPriceInput(String(livePrice));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [livePrice]);
+
   const fmtQty = (n) => new Intl.NumberFormat('hr-HR', { maximumFractionDigits: decimals }).format(n || 0);
+  const priceDecimals = kind === 'bitcoin' ? 0 : 2;
+  const fmtPrice = (n) => new Intl.NumberFormat('hr-HR', { maximumFractionDigits: priceDecimals }).format(n || 0) + ' €';
 
   const onQtyChange = (v) => {
     setQtyInput(v);
@@ -1853,6 +1914,8 @@ function HoldingsTrackerTab({ kind, label, unit, color, decimals = 2, allowSats 
   const handleSave = () => {
     const n = Number(qtyInput);
     if (qtyInput === '' || Number.isNaN(n)) return;
+    const p = priceInput === '' ? null : Number(priceInput);
+    const priceEur = p != null && !Number.isNaN(p) ? p : null;
     const loc = location.trim();
     const existing = entries.find((h) => h.month === month && (h.location || '') === loc);
     if (existing && existing.quantity !== n) {
@@ -1863,12 +1926,12 @@ function HoldingsTrackerTab({ kind, label, unit, color, decimals = 2, allowSats 
       const idx = prev.findIndex((h) => h.kind === kind && h.month === month && (h.location || '') === loc);
       if (idx >= 0) {
         const copy = [...prev];
-        copy[idx] = { ...copy[idx], quantity: n, location: loc };
+        copy[idx] = { ...copy[idx], quantity: n, location: loc, priceEur };
         return copy;
       }
-      return [...prev, { id: uid(), kind, month, location: loc, quantity: n }];
+      return [...prev, { id: uid(), kind, month, location: loc, quantity: n, priceEur }];
     });
-    setQtyInput(''); setSatInput(''); setLocation('');
+    setQtyInput(''); setSatInput(''); setLocation(''); setPriceInput('');
   };
 
   const handleEdit = (h) => {
@@ -1876,6 +1939,7 @@ function HoldingsTrackerTab({ kind, label, unit, color, decimals = 2, allowSats 
     setLocation(h.location || '');
     setQtyInput(String(h.quantity));
     if (allowSats) setSatInput(String(Math.round(h.quantity * 100000000)));
+    setPriceInput(h.priceEur != null ? String(h.priceEur) : '');
   };
 
   const handleDelete = (h) => {
@@ -1883,7 +1947,8 @@ function HoldingsTrackerTab({ kind, label, unit, color, decimals = 2, allowSats 
     if (ok) setHoldingsHistory((prev) => prev.filter((x) => x.id !== h.id));
   };
 
-  const chartData = monthlyTotals.map((h) => ({ month: monthLabel(h.month), qty: h.quantity }));
+  const chartData = monthlyTotals.map((h) => ({ month: monthLabel(h.month), qty: h.quantity, value: h.value }));
+  const hasAnyValue = monthlyTotals.some((h) => h.value != null);
 
   return (
     <div className="space-y-6">
@@ -1953,12 +2018,26 @@ function HoldingsTrackerTab({ kind, label, unit, color, decimals = 2, allowSats 
                 className="w-40 text-sm rounded-md px-2.5 py-1.5 text-right" style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.textMuted, fontVariantNumeric: 'tabular-nums' }} />
             </div>
           )}
+          <div>
+            <div className="text-xs mb-1" style={{ color: C.textFaint }}>Cijena (€/{unit === 'BTC' ? 'BTC' : unit})</div>
+            <div className="flex items-center gap-1.5">
+              <input type="number" step="any" value={priceInput} onChange={(e) => setPriceInput(e.target.value)} placeholder="0"
+                className="w-32 text-sm rounded-md px-2.5 py-1.5 text-right" style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.text, fontVariantNumeric: 'tabular-nums' }} />
+              {livePrice != null && (
+                <button type="button" onClick={() => setPriceInput(String(livePrice))} title="Koristi trenutnu tržišnu cijenu"
+                  className="p-1.5 rounded-md" style={{ color: C.textFaint, border: `1px solid ${C.border}` }}>
+                  <RefreshCw size={12} />
+                </button>
+              )}
+            </div>
+          </div>
           <button onClick={handleSave} className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-md text-sm font-semibold" style={{ background: C.goldSoft, color: C.bg }}>
             <Save size={14} /> Spremi
           </button>
         </div>
         <div className="text-xs mt-2" style={{ color: C.textFaint }}>
           Ostavi lokaciju praznom za jedan zbirni unos, ili razdijeli isti mjesec na više lokacija (npr. cold wallet, mjenjačnica) — zbrajaju se u ukupnu količinu iznad.
+          Cijena je predložena prema trenutnoj tržišnoj cijeni, ali je slobodno promijeni ako upisuješ stariji mjesec — koristi se za graf vrijednosti u eurima ispod.
         </div>
       </Card>
 
@@ -1982,6 +2061,28 @@ function HoldingsTrackerTab({ kind, label, unit, color, decimals = 2, allowSats 
         </Card>
       )}
 
+      {hasAnyValue && (
+        <Card style={{ padding: '20px 20px 8px' }}>
+          <div className="text-sm font-semibold mb-3" style={{ color: C.text }}>Vrijednost kroz mjesece (€)</div>
+          <ChartMask on={hide}>
+            <ResponsiveContainer width="100%" height={220}>
+              <LineChart data={chartData} margin={{ left: -10, right: 10 }}>
+                <CartesianGrid stroke={C.borderSoft} vertical={false} />
+                <XAxis dataKey="month" stroke={C.textFaint} tick={{ fontSize: 12 }} axisLine={{ stroke: C.border }} tickLine={false} />
+                <YAxis stroke={C.textFaint} tick={{ fontSize: 11 }} axisLine={false} tickLine={false} width={54} />
+                <Tooltip contentStyle={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12 }} formatter={(v) => [fmt(v), 'Vrijednost']} />
+                <Line type="monotone" dataKey="value" stroke={C.teal} strokeWidth={2} dot={{ r: 3 }} name="value" connectNulls />
+              </LineChart>
+            </ResponsiveContainer>
+          </ChartMask>
+          {monthlyTotals.some((h) => h.value == null) && (
+            <div className="text-xs text-center pb-3" style={{ color: C.textFaint }}>
+              Neki mjeseci nemaju upisanu cijenu pa nisu prikazani na ovom grafu — dopuni ih u tablici ispod.
+            </div>
+          )}
+        </Card>
+      )}
+
       {entries.length > 0 ? (
         <Card style={{ overflow: 'hidden' }}>
           <div className="overflow-x-auto">
@@ -1992,6 +2093,8 @@ function HoldingsTrackerTab({ kind, label, unit, color, decimals = 2, allowSats 
                   <th className="px-4 py-3 font-medium">Lokacija</th>
                   <th className="px-4 py-3 font-medium text-right">Količina</th>
                   {allowSats && <th className="px-4 py-3 font-medium text-right">Satoshi</th>}
+                  <th className="px-4 py-3 font-medium text-right">Cijena</th>
+                  <th className="px-4 py-3 font-medium text-right">Vrijednost</th>
                   <th className="px-4 py-3 font-medium text-right"></th>
                 </tr>
               </thead>
@@ -1999,6 +2102,8 @@ function HoldingsTrackerTab({ kind, label, unit, color, decimals = 2, allowSats 
                 {monthsDesc.map((m) => {
                   const monthEntries = entries.filter((h) => h.month === m);
                   const monthTotal = monthEntries.reduce((s, h) => s + (Number(h.quantity) || 0), 0);
+                  const monthHasValue = monthEntries.some((h) => h.priceEur != null);
+                  const monthValueTotal = monthEntries.reduce((s, h) => s + (h.priceEur != null ? (Number(h.quantity) || 0) * Number(h.priceEur) : 0), 0);
                   return (
                     <React.Fragment key={m}>
                       {monthEntries.map((h) => (
@@ -2011,6 +2116,12 @@ function HoldingsTrackerTab({ kind, label, unit, color, decimals = 2, allowSats 
                               {new Intl.NumberFormat('hr-HR').format(Math.round(h.quantity * 100000000))}
                             </td>
                           )}
+                          <td className="px-4 py-2.5 text-right" style={{ color: C.textFaint, fontVariantNumeric: 'tabular-nums', filter: hide ? 'blur(5px)' : 'none' }}>
+                            {h.priceEur != null ? fmtPrice(h.priceEur) : '—'}
+                          </td>
+                          <td className="px-4 py-2.5 text-right" style={{ color: C.text, fontVariantNumeric: 'tabular-nums', filter: hide ? 'blur(5px)' : 'none' }}>
+                            {h.priceEur != null ? fmt((Number(h.quantity) || 0) * Number(h.priceEur)) : '—'}
+                          </td>
                           <td className="px-4 py-2.5 text-right whitespace-nowrap">
                             <button onClick={() => handleEdit(h)} className="p-1.5 rounded" style={{ color: C.textMuted }}><PencilLine size={14} /></button>
                             <button onClick={() => handleDelete(h)} className="p-1.5 rounded" style={{ color: C.textFaint }}><Trash2 size={14} /></button>
@@ -2022,6 +2133,10 @@ function HoldingsTrackerTab({ kind, label, unit, color, decimals = 2, allowSats 
                           <td className="px-4 py-2" colSpan={2} style={{ color: C.textFaint, fontStyle: 'italic' }}>Ukupno {monthLabel(m)}</td>
                           <td className="px-4 py-2 text-right font-semibold" style={{ color: C.text, fontVariantNumeric: 'tabular-nums', filter: hide ? 'blur(5px)' : 'none' }}>{fmtQty(monthTotal)} {unit}</td>
                           {allowSats && <td className="px-4 py-2"></td>}
+                          <td className="px-4 py-2"></td>
+                          <td className="px-4 py-2 text-right font-semibold" style={{ color: C.text, fontVariantNumeric: 'tabular-nums', filter: hide ? 'blur(5px)' : 'none' }}>
+                            {monthHasValue ? fmt(monthValueTotal) : '—'}
+                          </td>
                           <td className="px-4 py-2"></td>
                         </tr>
                       )}
